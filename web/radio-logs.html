@@ -1,0 +1,307 @@
+<!DOCTYPE html><html lang='fr'><head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>OpenFrisquetVisio – Trames radio</title>
+<style>
+  :root{
+    --bg:#0f1115;--card:#171a21;--muted:#8a8f98;--txt:#e7e9ee;
+    --acc:#3aa3ff;--bd:#2a2f39;--ok:#1fb86a;--warn:#ffb020
+  }
+  *,*:before,*:after{box-sizing:border-box}
+  body{
+    margin:0;padding:24px;background:var(--bg);color:var(--txt);
+    font:15px/1.45 system-ui,Segoe UI,Roboto,Arial
+  }
+  a{color:var(--acc);text-decoration:none}
+  h1,h2{margin:0 0 12px}
+  .wrap{max-width:1280px;margin:0 auto;display:grid;gap:16px}
+  .card{
+    background:var(--card);border:1px solid var(--bd);border-radius:12px;
+    padding:18px;box-shadow:0 4px 16px rgba(0,0,0,.2)
+  }
+  .toolbar{
+    display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+    margin:8px 0 12px
+  }
+  .badge{
+    display:inline-flex;align-items:center;gap:6px;
+    padding:6px 10px;border-radius:999px;border:1px solid var(--bd);
+    background:#10131a;font-size:13px
+  }
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;
+    border:1px solid var(--bd);background:#0d1016;color:var(--txt);
+    padding:10px 14px;border-radius:10px;cursor:pointer;
+    text-decoration:none
+  }
+  .btn.primary{
+    background:var(--acc);color:#061019;border-color:transparent;
+    font-weight:700
+  }
+  label{
+    color:var(--muted);font-weight:600;font-size:13px;
+    display:flex;align-items:center;gap:6px
+  }
+  select,input[type=text],input[type=checkbox]{
+    padding:8px 10px;border:1px solid var(--bd);border-radius:10px;
+    background:#0d1016;color:var(--txt)
+  }
+  #payload {
+    width:100%;
+  }
+  pre{
+    font-size:80%;
+    white-space:pre-wrap;background:#0b0e13;color:#e6e6e6;
+    padding:12px;border-radius:10px;max-height:60vh;overflow:auto;
+    margin:0;font-family:ui-monospace,Menlo,Consolas,monospace
+  }
+  .muted{color:var(--muted)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .topnav{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+  .msg{
+    margin-top:8px;padding:8px 10px;border-radius:8px;
+    background:#111827;color:#e5e7eb;display:none;font-size:13px
+  }
+  .msg.show{display:block}
+  .msg.err{border:1px solid #b91c1c}
+  .msg.ok{border:1px solid #15803d}
+  @media (max-width:820px){.toolbar{gap:8px}}
+</style>
+</head><body>
+<div class='wrap'>
+
+  <div class='topnav'>
+    <a href='/' class='btn'>&larr;&nbsp;Retour</a>
+    <span class='badge'>OpenFrisquetVisio – Trames radio</span>
+    <a href='/logs' class='btn'>Tous les logs</a>
+  </div>
+
+  <div class='card'>
+    <h2>Trames radio (niveau RADIO)</h2>
+    <div class='toolbar'>
+      <label>Rafraîchissement
+        <select id='refresh'>
+          <option value='0'>Off</option>
+          <option value='1000'>1s</option>
+          <option value='2000' selected>2s</option>
+          <option value='5000'>5s</option>
+          <option value='10000'>10s</option>
+        </select>
+      </label>
+
+      <label>Filtre texte
+        <input id='filter' type='text' placeholder='rechercher...'>
+      </label>
+
+      <label>Lignes
+        <select id='limit'>
+          <option value='0' selected>Toutes</option>
+          <option value='200'>200</option>
+          <option value='500'>500</option>
+        </select>
+      </label>
+
+      <label>
+        <input id='autoscroll' type='checkbox' checked>
+        Auto-scroll
+      </label>
+
+      <button id='btnReload' class='btn'>Recharger</button>
+      <button id='btnClear' class='btn'>Effacer</button>
+    </div>
+
+    <pre id='log'>(chargement...)</pre>
+  </div>
+
+  <div class='card'>
+    <h2>Envoyer une trame radio</h2>
+    <div class='row'>
+      <label for='payload'>Payload hexadécimal</label>
+      <input id='payload' type='text' placeholder='ex: A5 01 02 0F 3C'>
+    </div>
+    <div class='hint muted' style='margin-top:4px'>
+      Format : uniquement 0-9, A-F, a-f et espaces. Les espaces sont ignorés.
+    </div>
+    <div class='row' style='margin-top:10px'>
+      <button id='btnSend' class='btn primary'>Envoyer</button>
+    </div>
+    <div id='msg' class='msg'></div>
+  </div>
+
+  <div class='muted' style='text-align:center'>
+    Cette page affiche uniquement les logs avec le niveau <code>RADIO</code>
+    (filtrés côté backend via <code>level=RADIO</code>).
+  </div>
+
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let raw = "";
+let timer = null;
+
+const elLog     = $("#log");
+const selRef    = $("#refresh");
+const selLimit  = $("#limit");
+const inpFilter = $("#filter");
+const cbAuto    = $("#autoscroll");
+const btnReload = $("#btnReload");
+const btnClear  = $("#btnClear");
+
+const inpPayload = $("#payload");
+const btnSend    = $("#btnSend");
+const msgBox     = $("#msg");
+
+let pollInFlight = false;
+let pollStopped = false;
+
+function showMsg(text, ok){
+  if(!msgBox) return;
+  msgBox.textContent = text;
+  msgBox.className = "msg show " + (ok ? "ok" : "err");
+}
+
+function applyFilters(txt){
+  if(!txt) return "";
+  let lines = txt.split("\n");
+
+  const f   = inpFilter.value.trim().toLowerCase();
+  if(f){
+    lines = lines.filter(l => l.toLowerCase().includes(f));
+  }
+
+  const lim = parseInt(selLimit.value||"0",10);
+  if(lim>0 && lines.length>lim){
+    lines = lines.slice(-lim);
+  }
+
+  return lines.join("\n");
+}
+
+function render(){
+  const out = applyFilters(raw);
+  elLog.textContent = out || "(vide)";
+  if(cbAuto.checked){
+    elLog.scrollTop = elLog.scrollHeight;
+  }
+}
+
+async function reload(){
+  if(pollInFlight || pollStopped) return;
+  pollInFlight = true;
+  try{
+    const limitParam = selLimit.value === "0" ? "500" : selLimit.value;
+    const qs =
+      "?limit=" + encodeURIComponent(limitParam) +
+      "&level=RADIO&_=" + Date.now();
+
+    const r = await fetch("/api/logs"+qs,{cache:"no-store"});
+    const arr = await r.json();   // ["ligne1", "ligne2", ...]
+    raw = arr.join("\n");
+    render();
+  }catch(e){
+    elLog.textContent = "Erreur chargement logs: " + e;
+  } finally {
+    pollInFlight = false;
+  }
+}
+
+function stopPolling(){
+  pollStopped = true;
+  if(timer){ clearTimeout(timer); timer = null; }
+}
+
+function startPolling(){
+  pollStopped = false;
+  scheduleNextPoll();
+}
+
+function scheduleNextPoll(){
+  if(pollStopped) return;
+  const v = parseInt(selRef.value||"0",10);
+  if(v>0){
+    if(timer){ clearTimeout(timer); timer = null; }
+    timer = setTimeout(async ()=>{
+      await reload();
+      scheduleNextPoll();
+    }, v);
+  }
+}
+
+function updateRefreshTimer(){
+  stopPolling();
+  const v = parseInt(selRef.value||"0",10);
+  if(v>0){
+    startPolling();
+  }
+}
+
+async function sendPayload(){
+  const hex = (inpPayload.value || "").trim();
+  if(!hex){
+    showMsg("Payload vide.", false);
+    return;
+  }
+
+  // petite validation côté front
+  if(!/^[0-9a-fA-F ]+$/.test(hex)){
+    showMsg("Payload invalide : utilisez uniquement 0-9, A-F et espaces.", false);
+    return;
+  }
+
+  try{
+    const fd = new FormData();
+    fd.append("payload", hex);
+
+    const r = await fetch("/api/radio/send", {
+      method:"POST",
+      body: fd
+    });
+
+    const txt = await r.text();
+    try {
+      const j = JSON.parse(txt);
+      if(j.ok){
+        showMsg("Trame envoyée (voir logs RADIO).", true);
+        // éventuellement on recharge les logs
+        reload();
+      } else {
+        showMsg("Erreur envoi trame : " + (j.err || "inconnue"), false);
+      }
+    } catch(_){
+      showMsg("Réponse inattendue du serveur: " + txt, false);
+    }
+  }catch(e){
+    showMsg("Erreur réseau lors de l'envoi: " + e, false);
+  }
+}
+
+document.addEventListener("DOMContentLoaded", ()=>{
+  btnReload.addEventListener("click", reload);
+  btnClear.addEventListener("click", async ()=>{
+    try{
+      await fetch("/api/logs/clear",{method:"POST"});
+      raw = "";
+      render();
+      showMsg("Logs effacés.", true);
+    }catch(e){
+      console.error("Erreur clear logs", e);
+      showMsg("Erreur lors de l'effacement des logs.", false);
+    }
+  });
+
+  [inpFilter, selLimit].forEach(el=>{
+    el.addEventListener("input", render);
+  });
+
+  selRef.addEventListener("change", updateRefreshTimer);
+
+  if(btnSend){
+    btnSend.addEventListener("click", sendPayload);
+  }
+
+  reload().then(updateRefreshTimer);
+});
+</script>
+
+</body></html>

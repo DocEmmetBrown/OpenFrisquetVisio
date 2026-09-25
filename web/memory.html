@@ -1,0 +1,270 @@
+<!DOCTYPE html><html lang='fr'><head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>OpenFrisquetVisio – Mémoire chaudière</title>
+<style>
+  :root{
+    --bg:#0f1115;--card:#171a21;--muted:#8a8f98;--txt:#e7e9ee;
+    --acc:#3aa3ff;--bd:#2a2f39;--ok:#1fb86a;--warn:#ffb020
+  }
+  *,*:before,*:after{box-sizing:border-box}
+  body{
+    margin:0;padding:24px;background:var(--bg);color:var(--txt);
+    font:15px/1.45 system-ui,Segoe UI,Roboto,Arial
+  }
+  a{color:var(--acc);text-decoration:none}
+  h1,h2{margin:0 0 12px}
+  .wrap{max-width:980px;margin:0 auto;display:grid;gap:16px}
+  .card{
+    background:var(--card);border:1px solid var(--bd);border-radius:12px;
+    padding:18px;box-shadow:0 4px 16px rgba(0,0,0,.2)
+  }
+  .toolbar{
+    display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+    margin:8px 0 12px
+  }
+  .badge{
+    display:inline-flex;align-items:center;gap:6px;
+    padding:6px 10px;border-radius:999px;border:1px solid var(--bd);
+    background:#10131a;font-size:13px
+  }
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;
+    border:1px solid var(--bd);background:#0d1016;color:var(--txt);
+    padding:10px 14px;border-radius:10px;cursor:pointer;
+    text-decoration:none
+  }
+  .btn.primary{
+    background:var(--acc);color:#061019;border-color:transparent;
+    font-weight:700
+  }
+  label{
+    color:var(--muted);font-weight:600;font-size:13px;
+    display:flex;align-items:center;gap:6px
+  }
+  input[type=text],input[type=number],select{
+    padding:8px 10px;border:1px solid var(--bd);border-radius:10px;
+    background:#0d1016;color:var(--txt)
+  }
+  pre{
+    white-space:pre;background:#0b0e13;color:#e6e6e6;
+    padding:12px;border-radius:10px;max-height:70vh;overflow:auto;
+    margin:0;font-family:ui-monospace,Menlo,Consolas,monospace
+  }
+  .muted{color:var(--muted)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .topnav{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+  .msg{
+    margin-top:10px;padding:10px 12px;border-radius:10px;
+    background:#0b0e13;border:1px solid var(--bd);display:none
+  }
+  .msg.show{display:block}
+  .msg.ok{border-color:var(--ok);color:var(--ok)}
+  .msg.err{border-color:#ff5a5a;color:#ff8a8a}
+</style>
+</head><body>
+<div class='wrap'>
+
+  <div class='topnav'>
+    <a href='/' class='btn'>&larr;&nbsp;Retour</a>
+    <span class='badge'>OpenFrisquetVisio – Mémoire chaudière</span>
+  </div>
+
+  <div class='card'>
+    <div class='toolbar'>
+      <label>Adresse (hex)
+        <input id='start' type='text' value='0000' size='6'>
+      </label>
+      <label>Longueur (mots 16-bit)
+        <input id='len' type='number' min='1' max='256' value='64'>
+      </label>
+      <label>Scan max
+        <input id='scanMax' type='number' min='1' max='512' value='128'>
+      </label>
+      <label>Scan pas
+        <input id='scanStep' type='number' min='1' max='256' value='1'>
+      </label>
+      <label>
+        <input id='auto' type='checkbox'>
+        Auto +len
+      </label>
+      <label>
+        <input id='scanStop' type='checkbox' checked>
+        Stop à la 1re zone valide
+      </label>
+      <label>
+        <input id='scanAuto' type='checkbox' checked>
+        Auto +scan
+      </label>
+      <label>Intervalle
+        <select id='refresh'>
+          <option value='0'>Off</option>
+          <option value='500'>500 ms</option>
+          <option value='1000'>1s</option>
+          <option value='2000'>2s</option>
+          <option value='5000'>5s</option>
+        </select>
+      </label>
+      <button class='btn primary' id='btnRead'>Lire</button>
+      <button class='btn' id='btnScan'>Scanner</button>
+      <button class='btn' id='btnStop'>Stop</button>
+    </div>
+    <div class='row muted'>
+      Utilise l'association Connect pour interroger la mémoire chaudière.
+    </div>
+    <pre id='dump'>(aucune donnée)</pre>
+    <div id='msg' class='msg'></div>
+  </div>
+
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const dump = $("#dump");
+const msg = $("#msg");
+const inpStart = $("#start");
+const inpLen = $("#len");
+const inpScanMax = $("#scanMax");
+const inpScanStep = $("#scanStep");
+const cbScanStop = $("#scanStop");
+const cbScanAuto = $("#scanAuto");
+const cbAuto = $("#auto");
+const selRef = $("#refresh");
+const btnRead = $("#btnRead");
+const btnScan = $("#btnScan");
+const btnStop = $("#btnStop");
+let timer = null;
+let pollInFlight = false;
+let pollStopped = false;
+
+function toHex(n, w){
+  return n.toString(16).toUpperCase().padStart(w, "0");
+}
+
+function showMsg(text, ok){
+  if(!msg) return;
+  msg.textContent = text;
+  msg.className = "msg show " + (ok ? "ok" : "err");
+}
+
+function renderDump(startHex, words){
+  if(!words || !words.length){
+    dump.textContent = "(aucune donnée)";
+    return;
+  }
+  const start = parseInt(startHex, 16) || 0;
+  const lines = [];
+  for(let i=0; i<words.length; i+=8){
+    const addr = start + i;
+    const chunk = words.slice(i, i+8).map(w => w === "??" ? "??" : w);
+    lines.push(toHex(addr,4) + ": " + chunk.join(" "));
+  }
+  dump.textContent = lines.join("\n");
+}
+
+async function readOnce(){
+  if(pollInFlight || pollStopped) return;
+  pollInFlight = true;
+  const start = (inpStart.value || "0000").trim();
+  const len = parseInt(inpLen.value || "16", 10);
+  const qs = "?start=" + encodeURIComponent(start) +
+             "&len=" + encodeURIComponent(len) +
+             "&_=" + Date.now();
+  try{
+    const r = await fetch("/api/memory" + qs, { cache:"no-store" });
+    const j = await r.json();
+    if(!j.ok){
+      showMsg(j.err || "Erreur lecture", false);
+      return;
+    }
+    renderDump(j.startHex || start, j.words || []);
+    if(j.errors && j.errors.length){
+      showMsg("Lecture partielle: " + j.errors.length + " erreurs.", false);
+    } else {
+      showMsg("Lecture OK (" + (j.words ? j.words.length : 0) + " mots).", true);
+    }
+    if(cbAuto.checked && j.startHex && j.words){
+      const next = (parseInt(j.startHex,16) + j.words.length) & 0xFFFF;
+      inpStart.value = toHex(next, 4);
+    }
+  }catch(e){
+    showMsg("Erreur réseau: " + e, false);
+  } finally {
+    pollInFlight = false;
+  }
+}
+
+async function scanOnce(){
+  const start = (inpStart.value || "0000").trim();
+  const max = parseInt(inpScanMax.value || "128", 10);
+  const step = parseInt(inpScanStep.value || "1", 10);
+  const stopOnValid = cbScanStop.checked ? "true" : "false";
+  const qs = "?start=" + encodeURIComponent(start) +
+             "&max=" + encodeURIComponent(max) +
+             "&step=" + encodeURIComponent(step) +
+             "&stopOnValid=" + encodeURIComponent(stopOnValid) +
+             "&_=" + Date.now();
+  try{
+    const r = await fetch("/api/memory/scan" + qs, { cache:"no-store" });
+    const j = await r.json();
+    if(!j.ok){
+      showMsg(j.err || "Erreur scan", false);
+      return;
+    }
+    if(j.found){
+      showMsg("Zone valide: " + j.addr + " = " + j.value + " (scan " + j.scanned + ")", true);
+      inpStart.value = j.addr;
+      readOnce();
+    } else {
+      showMsg("Aucune zone valide (scan " + j.scanned + ")", false);
+    }
+    if(cbScanAuto.checked && !j.found){
+      const base = parseInt(start, 16) || 0;
+      const next = (base + (j.scanned * step)) & 0xFFFF;
+      inpStart.value = toHex(next, 4);
+    }
+  }catch(e){
+    showMsg("Erreur réseau: " + e, false);
+  }
+}
+
+function stopPolling(){
+  pollStopped = true;
+  if(timer){ clearTimeout(timer); timer = null; }
+}
+
+function startPolling(){
+  pollStopped = false;
+  scheduleNextPoll();
+}
+
+function scheduleNextPoll(){
+  if(pollStopped) return;
+  const v = parseInt(selRef.value || "0", 10);
+  if(v > 0){
+    if(timer){ clearTimeout(timer); timer = null; }
+    timer = setTimeout(async ()=>{
+      await readOnce();
+      scheduleNextPoll();
+    }, v);
+  }
+}
+
+function updateTimer(){
+  stopPolling();
+  const v = parseInt(selRef.value || "0", 10);
+  if(v > 0){
+    startPolling();
+  }
+}
+
+btnRead.addEventListener("click", readOnce);
+btnScan.addEventListener("click", scanOnce);
+btnStop.addEventListener("click", ()=>{
+  selRef.value = "0";
+  updateTimer();
+});
+selRef.addEventListener("change", updateTimer);
+</script>
+
+</body></html>

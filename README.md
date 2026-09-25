@@ -53,6 +53,10 @@ Deux modes possibles :
 - Envoi de trame radio personnalisée (debug)
 - Lecture de zones mémoire (debug)
 
+Les pages du portail se trouvent dans le dossier **`web/`**. Lors d'une compilation
+PlatformIO, `tools/generate_web_assets.py` les transforme automatiquement en
+ressources C++ stockées dans le firmware.
+
 ### 🔁 Mise à jour OTA
 - Mise à jour du firmware directement via WiFi
 
@@ -86,7 +90,7 @@ Avant le flash :
 ### 2️⃣ Flash du firmware
 
 - Connecter la carte **Heltec ESP32** via **USB**  
-- Compiler et téléverser avec **PlatformIO** ou **Arduino IDE**
+- Compiler et téléverser avec **PlatformIO**
 - Au premier démarrage, le module crée un **point d’accès WiFi**
 
 ---
