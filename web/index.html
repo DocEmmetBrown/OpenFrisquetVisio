@@ -1,745 +1,114 @@
-<!DOCTYPE html><html lang='fr'><head>
-<meta charset='utf-8'>
-<meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>OpenFrisquetVisio – Configuration</title>
-<style>
-  :root{
-    --bg:#0f1115;--card:#171a21;--muted:#8a8f98;--txt:#e7e9ee;
-    --acc:#3aa3ff;--bd:#2a2f39;--ok:#1fb86a;--warn:#ffb020
-  }
-  *,*:before,*:after{box-sizing:border-box}
-  body{margin:0;padding:24px;background:var(--bg);color:var(--txt);font:15px/1.45 system-ui,Segoe UI,Roboto,Arial}
-  h1,h2{margin:0 0 12px}
-  a{color:var(--acc);text-decoration:none}
-  .wrap{max-width:980px;margin:0 auto;display:grid;gap:16px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  .grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
-  .grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
-  .card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:18px;box-shadow:0 4px 16px rgba(0,0,0,.2)}
-  .row{display:flex;flex-direction:column;gap:6px}
-  .row-inline{display:flex;gap:8px;align-items:center}
-  .row-inline input{flex:1}
-  label{font-weight:600}
-  .hint{color:var(--muted);font-size:12px}
-  input[type=text],input[type=password],input[type=number],select{
-    width:100%;padding:10px 12px;border:1px solid var(--bd);border-radius:10px;
-    background:#0d1016;color:var(--txt)
-  }
-  .pw{position:relative}
-  .pw button{
-    position:absolute;right:8px;top:50%;transform:translateY(-50%);
-    border:1px solid var(--bd);background:#0d1016;color:var(--muted);
-    padding:4px 8px;border-radius:8px;cursor:pointer;font-size:12px
-  }
-  .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
-  .btn{
-    display:inline-flex;align-items:center;gap:8px;border:1px solid var(--bd);
-    background:#0d1016;color:var(--txt);padding:10px 14px;border-radius:10px;
-    cursor:pointer;text-decoration:none
-  }
-  .btn.primary{background:var(--acc);color:#061019;border-color:transparent;font-weight:700}
-  .badge{
-    display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;
-    border:1px solid var(--bd);background:#10131a;font-size:13px
-  }
-  .ok{color:var(--ok)} .warn{color:var(--warn)}
-  .split{display:grid;grid-template-columns:1.3fr .7fr;gap:16px}
-  .footer{color:var(--muted);font-size:12px;text-align:center;margin-top:8px}
-  .msg{margin-top:10px;padding:10px;border-radius:8px;background:#111827;color:#e5e7eb;display:none}
-  .msg.show{display:block}
-  @media (max-width:820px){
-    .grid,.grid-3, .grid-2, .split{grid-template-columns:1fr}
-  }
-  .btn.btn-sm{
-    padding:6px 10px;
-    font-size:13px;
-  }
-</style>
-</head><body>
-<div class='wrap'>
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OpenFrisquetVisio – Tableau de bord</title>
+  <style>
+    :root {
+      --bg:#f3f6fa;--surface:#fff;--surface-soft:#f8fafc;--text:#172033;
+      --muted:#687386;--border:#dce3ec;--navy:#07305f;--blue:#0798df;
+      --red:#ef2d16;--green:#178653;--orange:#c86b08;--shadow:0 12px 32px rgba(31,48,75,.08)
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    a{text-decoration:none;color:inherit} button{font:inherit}
+    .shell{width:min(1180px,calc(100% - 32px));margin:0 auto}
+    .topbar{background:rgba(255,255,255,.96);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10;backdrop-filter:blur(12px)}
+    .topbar-inner{min-height:76px;display:flex;align-items:center;justify-content:space-between;gap:18px}
+    .logo{display:block;width:250px;max-width:55vw;height:auto}
+    .actions{display:flex;align-items:center;gap:10px}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:9px 15px;border:1px solid var(--border);border-radius:12px;background:#fff;color:var(--navy);font-weight:700;cursor:pointer;transition:.18s ease}
+    .btn:hover{transform:translateY(-1px);border-color:#afbdcc;box-shadow:0 6px 18px rgba(31,48,75,.08)}
+    .btn.primary{background:var(--navy);border-color:var(--navy);color:#fff}
+    main{padding:30px 0 44px}
+    .hero{display:grid;grid-template-columns:1.4fr .8fr;gap:18px;margin-bottom:18px}
+    .panel,.metric,.zone{background:var(--surface);border:1px solid var(--border);border-radius:20px;box-shadow:var(--shadow)}
+    .hero-main{padding:28px;background:linear-gradient(135deg,#fff 0%,#f2f8fd 100%)}
+    .eyebrow{margin:0 0 8px;color:var(--blue);font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}
+    h1,h2,h3,p{margin-top:0} h1{margin-bottom:8px;font-size:clamp(27px,4vw,40px);line-height:1.15;color:var(--navy)} h2{font-size:20px;color:var(--navy)}
+    .lead{max-width:680px;margin:0;color:var(--muted);font-size:16px}
+    .boiler-state{padding:24px;display:flex;flex-direction:column;justify-content:space-between}
+    .state-line{display:flex;align-items:center;gap:12px}.state-icon{display:grid;place-items:center;width:48px;height:48px;border-radius:15px;background:#edf7fd;font-size:26px}
+    .state-value{font-size:20px;font-weight:800;color:var(--navy)}.state-caption{font-size:13px;color:var(--muted)}
+    .status-row{display:flex;flex-wrap:wrap;gap:9px;margin-top:18px}
+    .status{display:inline-flex;align-items:center;gap:7px;padding:7px 11px;border-radius:999px;background:#eef2f6;color:#526075;font-size:13px;font-weight:700}
+    .status::before{content:"";width:8px;height:8px;border-radius:50%;background:#8793a3}
+    .status.ok{background:#e9f7f0;color:var(--green)}.status.ok::before{background:var(--green)}
+    .status.warn{background:#fff3e4;color:var(--orange)}.status.warn::before{background:var(--orange)}
+    .status.bad{background:#ffebe8;color:#b42318}.status.bad::before{background:#d92d20}
+    .section-head{display:flex;align-items:end;justify-content:space-between;gap:16px;margin:28px 2px 12px}.section-head h2{margin:0}.updated{color:var(--muted);font-size:12px}
+    .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+    .metric{padding:18px;min-height:138px;display:flex;flex-direction:column}.metric-icon{font-size:25px;margin-bottom:12px}.metric-label{color:var(--muted);font-size:13px;font-weight:650}
+    .metric-value{margin-top:auto;font-size:26px;line-height:1.15;font-weight:850;color:var(--navy)}.metric-note{margin-top:5px;color:var(--muted);font-size:12px}
+    .zones{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.zone{padding:20px}.zone-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:18px}
+    .zone-title{display:flex;gap:10px;align-items:center}.zone-title h3{margin:0;color:var(--navy)}.mode{padding:5px 9px;border-radius:999px;background:#edf7fd;color:#0879b1;font-size:12px;font-weight:800}
+    .zone-values{display:grid;grid-template-columns:1fr 1fr;gap:12px}.zone-value{padding:12px;border-radius:14px;background:var(--surface-soft);border:1px solid #edf0f4}
+    .zone-value span{display:block;color:var(--muted);font-size:12px}.zone-value strong{display:block;margin-top:3px;color:var(--navy);font-size:19px}.zone-source{margin-top:13px;color:var(--muted);font-size:12px}
+    .empty{grid-column:1/-1;padding:28px;text-align:center;color:var(--muted);background:#fff;border:1px dashed #bfc9d6;border-radius:18px}
+    .diagnostics{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}.diagnostic{padding:16px 18px;border:1px solid var(--border);border-radius:16px;background:#fff;color:var(--navy);font-weight:750}.diagnostic span{margin-right:8px}
+    footer{padding:18px 0 34px;color:var(--muted);font-size:12px;text-align:center}.skeleton{color:#a2acba}
+    @media(max-width:900px){.hero{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.zones{grid-template-columns:1fr}.diagnostics{grid-template-columns:1fr}}
+    @media(max-width:560px){.shell{width:min(100% - 20px,1180px)}.topbar-inner{min-height:66px}.logo{width:190px}.btn-label{display:none}.hero-main,.boiler-state{padding:20px}.metrics{grid-template-columns:1fr 1fr;gap:10px}.metric{padding:15px;min-height:126px}.metric-value{font-size:22px}}
+  </style>
+</head>
+<body>
+  <header class="topbar"><div class="shell topbar-inner">
+    <a href="/" aria-label="Accueil"><img class="logo" src="/logo.png" alt="OpenFrisquetVisio"></a>
+    <div class="actions"><button class="btn" id="refreshBtn" type="button" title="Actualiser">↻ <span class="btn-label">Actualiser</span></button><a class="btn primary" href="/settings">⚙️ <span class="btn-label">Paramètres</span></a></div>
+  </div></header>
 
-  <div class='split'>
-    <div class='card'>
-      <h2>OpenFrisquetVisio – Configuration</h2>
-      <p class='hint'>
-        Renseignez le Wi-Fi, le broker MQTT et les options Frisquet puis cliquez sur
-        <strong>Enregistrer</strong>.
-      </p>
-
-      <form id='form' autocomplete='off'>
-
-        <div class='card' style='background:#14171f;margin-bottom:12px'>
-          <h3 style='margin:0 0 8px;font-size:15px'>Wi-Fi</h3>
-          <div class='grid'>
-            <div class='row'>
-              <label>Nom d'hôte</label>
-              <input id='wifiHostname' type='text' placeholder='esp32-device'>
-              <div class='hint'>Nom utilisé sur le réseau (mDNS / logs).</div>
-            </div>
-            <div class='row'>
-              <label>SSID Wi-Fi</label>
-              <input id='wifiSsid' type='text' placeholder='MaBox'>
-              <div class='hint'>Nom du réseau (2.4 GHz recommandé).</div>
-            </div>
-          </div>
-          <div class='grid'>
-            <div class='row pw'>
-              <label>Mot de passe Wi-Fi</label>
-              <input id='wifiPass' type='password' placeholder='••••••••'>
-              <button type='button' data-toggle='#wifiPass'>Afficher</button>
-            </div>
-          </div>
-          <div style='margin-top:10px'>
-            <label class='check-row'>
-              <input id='wifiStatic' type='checkbox'>
-              <span>Utiliser une IP statique (DHCP désactivé)</span>
-            </label>
-            <div class='hint'>Cochez pour saisir une adresse IP, gateway, masque et DNS.</div>
-          </div>
-
-          <div id='wifiStaticBlock' style='display:none;margin-top:6px'>
-            <div style='margin-top:8px' class='grid-3'>
-              <div class='row'>
-                <label>Adresse IP</label>
-                <input id='wifiIp' type='text' placeholder='192.168.1.50'>
-              </div>
-              <div class='row'>
-                <label>Gateway</label>
-                <input id='wifiGw' type='text' placeholder='192.168.1.1'>
-              </div>
-              <div class='row'>
-                <label>Masque</label>
-                <input id='wifiMask' type='text' placeholder='255.255.255.0'>
-              </div>
-            </div>
-
-            <div style='margin-top:8px' class='grid-2'>
-              <div class='row'>
-                <label>DNS 1</label>
-                <input id='wifiDns1' type='text' placeholder='1.1.1.1'>
-              </div>
-              <div class='row'>
-                <label>DNS 2</label>
-                <input id='wifiDns2' type='text' placeholder='8.8.8.8'>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class='card' style='background:#14171f;margin-bottom:12px'>
-          <h3 style='margin:0 0 8px;font-size:15px'>MQTT</h3>
-          <div class='grid-3'>
-            <div class='row'>
-              <label>Client ID</label>
-              <input id='mqttClientId' type='text' placeholder='OpenFrisquetVisio'>
-            </div>
-            <div class='row'>
-              <label>Base topic</label>
-              <input id='mqttBaseTopic' type='text' placeholder='frisquet'>
-            </div>
-            <div class='row'>
-              <label>Hôte</label>
-              <input id='mqttHost' type='text' placeholder='192.168.1.10'>
-            </div>
-          </div>
-          <div class='grid-3' style='margin-top:8px'>
-            <div class='row'>
-              <label>Port</label>
-              <input id='mqttPort' type='number' min='1' max='65535' placeholder='1883'>
-            </div>
-            <div class='row'>
-              <label>Utilisateur</label>
-              <input id='mqttUser' type='text' placeholder='(optionnel)'>
-            </div>
-            <div class='row pw'>
-              <label>Mot de passe MQTT</label>
-              <input id='mqttPass' type='password' placeholder='(optionnel)'>
-              <button type='button' data-toggle='#mqttPass'>Afficher</button>
-            </div>
-          </div>
-        </div>
-
-
-        <div class='card' style='background:#14171f;margin-bottom:12px'>
-          <h3 style='margin:0 0 8px;font-size:15px'>Frisquet</h3>
-          <hr />
-          <div class='row' style='margin-bottom:10px'>
-            <label>NetworkID</label>
-            <div class='row-inline'>
-              <input id='networkID' type='text' placeholder='00:00:00:00'>
-              <button type='button' class='btn btn-sm' id='btnRecupNetworkID'>
-                Récupérer
-              </button>
-            </div>
-            <div class='hint'>
-              Identifiant réseau au format <code>AA:BB:CC:DD</code>.
-            </div>
-          </div>
-
-          <div class='grid-2'>
-            <div class='row'>
-              <label>Mode Connect</label>
-              <select id='useConnectMode'>
-                <option value='0'>Ne pas utiliser le système Connect</option>
-                <option value='1'>Utiliser le Frisquet Connect virtuel</option>
-                <option value='2'>Utiliser le Frisquet Connect physique (écoute uniquement)</option>
-              </select>
-              <div class='hint'>Le mode virtuel permet l'association et l'envoi de commandes, le mode physique est passif.</div>
-            </div>
-
-            <div class="row">
-              <button type='button' class='btn btn-sm' id='btnPairConnect' style='margin-top:6px;display:none'>
-                Associer le Connect
-              </button>
-            </div>
-          </div>
-
-          <div class='grid-3' style="margin-top:10px">
-            <div class='row'>
-              <label>Mode Sonde extérieure</label>
-              <select id='useSondeMode'>
-                <option value='0'>Ne pas utiliser la sonde extérieure</option>
-                <option value='1'>Sonde extérieure Frisquet</option>
-                <option value='2'>Sonde extérieure virtuelle</option>
-                <option value='3'>Sonde extérieure avec DS18B20</option>
-              </select>
-              <div class='hint'>Les modes 0 et 1 n'activent pas la sonde extérieure.</div>
-            </div>
-            <div class='row'>
-              <button type='button' class='btn btn-sm' id='btnPairSondeExt' style='margin-top:6px;display:none'>
-                Associer la sonde extérieure
-              </button>
-            </div>
-          </div>
-          <hr />
-          <h4>Gestion des zones</h4>
-
-          <div class='grid-3' style="margin-top:10px">
-            <div class='row'>
-              <label>Mode Zone 1</label>
-              <select id='useZoneMode1'>
-                <option value='0'>Pas de gestion de la zone</option>
-                <option value='1'>Gérer la zone avec satellite physique</option>
-                <option value='2'>Gérer la zone avec satellite virtuel</option>
-              </select>
-              <button type='button' class='btn btn-sm' id='btnPairSatZ1' style='margin-top:6px;display:none'>
-                Associer le Satellite Z1
-              </button>
-            </div>
-
-            <div class='row'>
-              <label>Mode Zone 2</label>
-              <select id='useZoneMode2'>
-                <option value='0'>Pas de gestion de la zone</option>
-                <option value='1'>Gérer la zone avec satellite physique</option>
-                <option value='2'>Gérer la zone avec satellite virtuel</option>
-              </select>
-              <button type='button' class='btn btn-sm' id='btnPairSatZ2' style='margin-top:6px;display:none'>
-                Associer le Satellite Z2
-              </button>
-            </div>
-
-            <div class='row'>
-              <label>Mode Zone 3</label>
-              <select id='useZoneMode3'>
-                <option value='0'>Pas de gestion de la zone</option>
-                <option value='1'>Gérer la zone avec satellite physique</option>
-                <option value='2'>Gérer la zone avec satellite virtuel</option>
-              </select>
-              <button type='button' class='btn btn-sm' id='btnPairSatZ3' style='margin-top:6px;display:none'>
-                Associer le Satellite Z3
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div class='actions'>
-          <button class='btn primary' type='submit'>Enregistrer</button>
-          <button class='btn' type='button' id='btnReboot'>Redémarrer</button>
-          <a class='btn' href='/logs'>Voir les logs</a>
-          <a class='btn' href='/logs-radio'>Trames radio</a>
-          <a class='btn' href='/memory'>Mémoire chaudière</a>
-        </div>
-
-
-        <div id='msg' class='msg'></div>
-      </form>
-    </div>
-
-    <div class='card'>
-      <h2>Statut</h2>
-      <div class='row'>
-        <span class='badge'>
-          <span>Mode AP&nbsp;:</span>
-          <span id='badgeAp' class='warn'>inconnu</span>
-        </span>
-        <span class='badge'>
-          <span>Station Wi-Fi&nbsp;:</span>
-          <span id='badgeSta' class='warn'>inconnu</span>
-        </span>
-        <span class='badge'>
-          <span>Uptime&nbsp;:</span>
-          <span id='badgeUptime' class='warn'>inconnu</span>
-        </span>
-        <span class='badge'>
-          <span>Reset&nbsp;:</span>
-          <span id='badgeReset' class='warn'>inconnu</span>
-        </span>
+  <main class="shell">
+    <section class="hero">
+      <div class="panel hero-main"><p class="eyebrow">Tableau de bord</p><h1>Votre chauffage en un coup d’œil</h1><p class="lead">Températures, modes et état de la chaudière sont actualisés automatiquement.</p>
+        <div class="status-row"><span class="status" id="wifiStatus">Wi‑Fi…</span><span class="status" id="mqttStatus">MQTT…</span><span class="status" id="uptimeStatus">Démarrage…</span></div>
       </div>
-      <div class='row' style='margin-top:8px'>
-        <div class='hint'>
-          Si la station se déconnecte, un point d’accès de secours sera lancé automatiquement.
-        </div>
+      <div class="panel boiler-state"><div class="state-line"><div class="state-icon">🔥</div><div><div class="state-caption">État de la chaudière</div><div class="state-value skeleton" id="boilerState">Chargement…</div></div></div>
+        <div class="status-row"><span class="status" id="heatingMode">Mode chauffage…</span><span class="status" id="hotWaterMode">ECS…</span></div>
       </div>
-    </div>
+    </section>
 
-    <div class='card'>
-      <h2>Mise à jour firmware</h2>
-      <p class='hint'>
-        Sélectionnez un fichier <code>.bin</code> compilé pour ce Heltec V3, puis lancez l’upload.
-        L’appareil redémarrera automatiquement.
-      </p>
-      <form id='fwForm'>
-        <div class='row'>
-          <label>Fichier firmware</label>
-          <input id='fwFile' type='file' accept='.bin'>
-        </div>
-        <div class='actions' style='margin-top:10px'>
-          <button class='btn' type='submit' id='fwBtn'>Uploader</button>
-        </div>
-        <div id='fwMsg' class='msg'></div>
-      </form>
-    </div>
+    <div class="section-head"><h2>🌡️ Températures et circuit</h2><span class="updated" id="lastUpdate">En attente des données</span></div>
+    <section class="metrics">
+      <article class="metric"><div class="metric-icon">🏡</div><div class="metric-label">Température extérieure</div><div class="metric-value skeleton" id="outdoorTemp">—</div><div class="metric-note" id="outdoorSource">Chaudière</div></article>
+      <article class="metric"><div class="metric-icon">🚿</div><div class="metric-label">Eau chaude sanitaire</div><div class="metric-value skeleton" id="hotWaterTemp">—</div><div class="metric-note">Température ECS</div></article>
+      <article class="metric"><div class="metric-icon">♨️</div><div class="metric-label">Corps de chauffe</div><div class="metric-value skeleton" id="heatingBodyTemp">—</div><div class="metric-note">Circuit chaudière</div></article>
+      <article class="metric"><div class="metric-icon">💨</div><div class="metric-label">Fumées</div><div class="metric-value skeleton" id="flueTemp">—</div><div class="metric-note">Température des fumées</div></article>
+      <article class="metric"><div class="metric-icon">💧</div><div class="metric-label">Pression</div><div class="metric-value skeleton" id="pressure">—</div><div class="metric-note">Circuit de chauffage</div></article>
+      <article class="metric"><div class="metric-icon">⚡</div><div class="metric-label">Puissance chauffage</div><div class="metric-value skeleton" id="heatingPower">—</div><div class="metric-note">Valeur instantanée</div></article>
+      <article class="metric"><div class="metric-icon">🚿</div><div class="metric-label">Puissance ECS</div><div class="metric-value skeleton" id="hotWaterPower">—</div><div class="metric-note">Valeur instantanée</div></article>
+      <article class="metric"><div class="metric-icon">📊</div><div class="metric-label">Consommation gaz</div><div class="metric-value skeleton" id="gasConsumption">—</div><div class="metric-note">Chauffage / ECS</div></article>
+    </section>
 
-  </div>
+    <div class="section-head"><h2>🛋️ Zones de chauffage</h2></div><section class="zones" id="zones"><div class="empty">Chargement des zones…</div></section>
+    <div class="section-head"><h2>🛠️ Outils et diagnostic</h2></div>
+    <nav class="diagnostics"><a class="diagnostic" href="/logs"><span>📋</span>Journaux système</a><a class="diagnostic" href="/logs-radio"><span>📡</span>Trames radio</a><a class="diagnostic" href="/memory"><span>🧠</span>Mémoire chaudière</a></nav>
+  </main>
+  <footer>OpenFrisquetVisio · version {{OPENFRISQUETVISIO_VERSION}}</footer>
 
-  <div class='footer'>
-    Portail de configuration – OpenFrisquetVisio · version {{OPENFRISQUETVISIO_VERSION}}
-  </div>
-</div>
-
-<script>
-const $ = sel => document.querySelector(sel);
-const msg = (t) => { const m=$("#msg"); if(!m) return; m.textContent=t; m.classList.add("show"); };
-const fwMsg = (t) => { const m=$("#fwMsg"); if(!m) return; m.textContent=t; m.classList.add("show"); };
-let savedCfg = {
-  useConnect: false,
-  useConnectPassive: false,
-  useSondeExt: false,
-  useDS18B20: false,
-  useZone1: false,
-  useZone2: false,
-  useZone3: false,
-  useSatelliteZ1: false,
-  useSatelliteZ2: false,
-  useSatelliteZ3: false,
-  useSatelliteVirtualZ1: false,
-  useSatelliteVirtualZ2: false,
-  useSatelliteVirtualZ3: false
-};
-
-const FIELDS = [
-  "wifiHostname","wifiSsid","wifiPass","wifiStatic","wifiIp","wifiGw","wifiMask","wifiDns1","wifiDns2",
-  "mqttHost","mqttPort","mqttUser","mqttPass",
-  "mqttClientId","mqttBaseTopic",
-  "networkID"
-];
-
-function updatePairButtons() {
-  const selConnectMode = $("#useConnectMode");
-  const selSondeMode = $("#useSondeMode");
-  const btnConnect = $("#btnPairConnect");
-  const btnSonde   = $("#btnPairSondeExt");
-
-  if (selConnectMode && btnConnect) {
-    const canPairConnect = savedCfg.useConnect && !savedCfg.useConnectPassive;
-    btnConnect.style.display = canPairConnect ? "inline-flex" : "none";
-  }
-  if (selSondeMode && btnSonde) {
-    btnSonde.style.display = savedCfg.useSondeExt ? "inline-flex" : "none";
-  }
-
-
-  const btnZ1 = $("#btnPairSatZ1");
-  const btnZ2 = $("#btnPairSatZ2");
-  const btnZ3 = $("#btnPairSatZ3");
-
-  if (btnZ1) btnZ1.style.display = savedCfg.useSatelliteZ1 && savedCfg.useSatelliteVirtualZ1 ? "inline-flex" : "none";
-  if (btnZ2) btnZ2.style.display = savedCfg.useSatelliteZ2 && savedCfg.useSatelliteVirtualZ2 ? "inline-flex" : "none";
-  if (btnZ3) btnZ3.style.display = savedCfg.useSatelliteZ3 && savedCfg.useSatelliteVirtualZ3 ? "inline-flex" : "none";
-}
-
-
-// Update the visibility / enabled state of the static IP inputs.
-function updateStaticInputs(){
-  const chkStatic = document.querySelector('#wifiStatic');
-  const staticBlock = document.querySelector('#wifiStaticBlock');
-  const ipInputs = ["#wifiIp","#wifiGw","#wifiMask","#wifiDns1","#wifiDns2"].map(s=>document.querySelector(s));
-  const enabled = chkStatic && chkStatic.checked;
-  if (staticBlock) staticBlock.style.display = enabled ? 'block' : 'none';
-  ipInputs.forEach(i=>{ if(!i) return; i.disabled = !enabled; i.style.opacity = enabled ? '1' : '0.6'; });
-}
-
-async function loadConfig() {
-  try {
-    const r = await fetch("/api/config",{cache:"no-store"});
-    const j = await r.json();
-    savedCfg.useConnect = !!j.useConnect;
-    savedCfg.useConnectPassive = !!j.useConnectPassive;
-    savedCfg.useSondeExt = !!j.useSondeExt;
-    savedCfg.useDS18B20 = !!j.useDS18B20;
-    savedCfg.useZone1 = !!j.useZone1;
-    savedCfg.useZone2 = !!j.useZone2;
-    savedCfg.useZone3 = !!j.useZone3;
-    savedCfg.useSatelliteZ1 = !!j.useSatelliteZ1;
-    savedCfg.useSatelliteZ2 = !!j.useSatelliteZ2;
-    savedCfg.useSatelliteZ3 = !!j.useSatelliteZ3;
-    savedCfg.useSatelliteVirtualZ1 = !!j.useSatelliteVirtualZ1;
-    savedCfg.useSatelliteVirtualZ2 = !!j.useSatelliteVirtualZ2;
-    savedCfg.useSatelliteVirtualZ3 = !!j.useSatelliteVirtualZ3;
-    const selConnectMode = $("#useConnectMode");
-    if (selConnectMode) {
-      if (!j.useConnect) {
-        selConnectMode.value = "0";
-      } else {
-        selConnectMode.value = j.useConnectPassive ? "2" : "1";
-      }
+  <script>
+    const $ = selector => document.querySelector(selector);
+    const value = (number, unit, decimals = 1) => number == null ? "—" : Number(number).toFixed(decimals) + " " + unit;
+    const integer = (number, unit) => number == null ? "—" : Number(number).toFixed(0) + (unit ? " " + unit : "");
+    function setText(selector, text){const element=$(selector);if(!element)return;element.textContent=text;element.classList.remove("skeleton")}
+    function setStatus(selector,text,tone){const element=$(selector);if(!element)return;element.textContent=text;element.className="status "+(tone||"")}
+    function formatUptime(seconds){const total=Math.max(0,Number(seconds||0));const days=Math.floor(total/86400);const hours=Math.floor((total%86400)/3600);const minutes=Math.floor((total%3600)/60);return(days?days+" j ":"")+hours+" h "+String(minutes).padStart(2,"0")}
+    function renderZones(zones){
+      const container=$("#zones");const enabled=(zones||[]).filter(zone=>zone.enabled);
+      if(!enabled.length){container.innerHTML='<div class="empty">Aucune zone de chauffage n’est activée.</div>';return}
+      container.innerHTML=enabled.map(zone=>`<article class="zone"><div class="zone-head"><div class="zone-title"><span>🛋️</span><h3>Zone ${zone.id}</h3></div><span class="mode">${zone.mode||"Inconnu"}${zone.boost?" · Boost":""}</span></div><div class="zone-values"><div class="zone-value"><span>Ambiance</span><strong>${value(zone.ambientTemperature,"°C")}</strong></div><div class="zone-value"><span>Consigne</span><strong>${value(zone.setpointTemperature,"°C")}</strong></div><div class="zone-value"><span>Départ</span><strong>${value(zone.flowTemperature,"°C")}</strong></div><div class="zone-value"><span>Consigne départ</span><strong>${value(zone.flowSetpointTemperature,"°C")}</strong></div></div><div class="zone-source">Source : ${zone.source||"inconnue"}</div></article>`).join("")
     }
-    const selSondeMode = $("#useSondeMode");
-    if (selSondeMode) {
-      if (!j.useSondeExt) {
-        selSondeMode.value = "0";
-      } else {
-        selSondeMode.value = j.useDS18B20 ? "3" : "2";
-      }
+    function render(data){
+      const network=data.connectivity||{},boiler=data.boiler||{},probe=data.outdoorProbe||{};
+      setStatus("#wifiStatus",network.wifiConnected?`Wi‑Fi · ${network.ssid||network.ip||"connecté"}`:"Wi‑Fi déconnecté",network.wifiConnected?"ok":"bad");
+      setStatus("#mqttStatus",network.mqttConnected?"MQTT connecté":"MQTT déconnecté",network.mqttConnected?"ok":"warn");setStatus("#uptimeStatus","Actif depuis "+formatUptime(data.uptimeSec),"ok");
+      setText("#boilerState",boiler.enabled?(boiler.state||"Inconnu"):"Non configurée");setStatus("#heatingMode",boiler.heatingMode||"Mode inconnu",boiler.anomaly?"bad":"ok");setStatus("#hotWaterMode","ECS · "+(boiler.hotWaterMode||"Inconnu"),boiler.hotWaterMode==="Stop"?"warn":"ok");
+      const outdoor=probe.enabled&&probe.temperature!=null?probe.temperature:boiler.outdoorTemperature;setText("#outdoorTemp",value(outdoor,"°C"));setText("#outdoorSource",probe.enabled&&probe.temperature!=null?"Sonde extérieure":"Chaudière");
+      setText("#hotWaterTemp",value(boiler.hotWaterTemperature,"°C"));setText("#heatingBodyTemp",value(boiler.heatingBodyTemperature,"°C"));setText("#flueTemp",value(boiler.flueTemperature,"°C"));setText("#pressure",value(boiler.pressure,"bar",2));setText("#heatingPower",value(boiler.heatingPower,"kW"));setText("#hotWaterPower",value(boiler.hotWaterPower,"kW"));
+      const heatingGas=integer(boiler.heatingConsumption,"kWh"),hotWaterGas=integer(boiler.hotWaterConsumption,"kWh");setText("#gasConsumption",heatingGas==="—"&&hotWaterGas==="—"?"—":heatingGas+" / "+hotWaterGas);renderZones(data.zones);$("#lastUpdate").textContent="Mis à jour à "+new Date().toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit",second:"2-digit"})
     }
-    const selZoneMode1 = $("#useZoneMode1");
-    const selZoneMode2 = $("#useZoneMode2");
-    const selZoneMode3 = $("#useZoneMode3");
-    if (selZoneMode1) {
-      selZoneMode1.value = !j.useSatelliteZ1 ? "0" : (j.useSatelliteVirtualZ1 ? "2" : "1");
-    }
-    if (selZoneMode2) {
-      selZoneMode2.value = !j.useSatelliteZ2 ? "0" : (j.useSatelliteVirtualZ2 ? "2" : "1");
-    }
-    if (selZoneMode3) {
-      selZoneMode3.value = !j.useSatelliteZ3 ? "0" : (j.useSatelliteVirtualZ3 ? "2" : "1");
-    }
-    FIELDS.forEach(id => {
-      const el = $("#"+id);
-      if (!el || j[id] === undefined) return;
-
-      if (el.type === "checkbox") {
-        el.checked = !!j[id];       // j[id] est un booléen côté JSON
-      } else {
-        el.value = j[id];
-      }
-    });
-    updatePairButtons();
-    // ensure static IP block is in correct state after loading config
-    try { updateStaticInputs(); } catch(e){}
-  } catch(e) {
-    msg("Impossible de charger la configuration.");
-  }
-}
-
-
-async function saveConfig(e) {
-  e.preventDefault();
-  const fd = new FormData();
-
-  const selConnectMode = document.querySelector('#useConnectMode');
-  if (selConnectMode) {
-    const mode = selConnectMode.value;
-    fd.append("useConnect", mode === "1" || mode === "2" ? "true" : "false");
-    fd.append("useConnectPassive", mode === "2" ? "true" : "false");
-  }
-  const selSondeMode = document.querySelector('#useSondeMode');
-  if (selSondeMode) {
-    const mode = selSondeMode.value;
-    fd.append("useSondeExt", mode === "2" || mode === "3" ? "true" : "false");
-    fd.append("useDS18B20", mode === "3" ? "true" : "false");
-  }
-  const selZoneMode1 = document.querySelector('#useZoneMode1');
-  if (selZoneMode1) {
-    const mode = selZoneMode1.value;
-    fd.append("useZone1", mode !== "0" ? "true" : "false");
-    fd.append("useSatelliteZ1", mode !== "0" ? "true" : "false");
-    fd.append("useSatelliteVirtualZ1", mode === "2" ? "true" : "false");
-  }
-  const selZoneMode2 = document.querySelector('#useZoneMode2');
-  if (selZoneMode2) {
-    const mode = selZoneMode2.value;
-    fd.append("useZone2", mode !== "0" ? "true" : "false");
-    fd.append("useSatelliteZ2", mode !== "0" ? "true" : "false");
-    fd.append("useSatelliteVirtualZ2", mode === "2" ? "true" : "false");
-  }
-  const selZoneMode3 = document.querySelector('#useZoneMode3');
-  if (selZoneMode3) {
-    const mode = selZoneMode3.value;
-    fd.append("useZone3", mode !== "0" ? "true" : "false");
-    fd.append("useSatelliteZ3", mode !== "0" ? "true" : "false");
-    fd.append("useSatelliteVirtualZ3", mode === "2" ? "true" : "false");
-  }
-
-  FIELDS.forEach(id => {
-    const el = document.querySelector('#'+id);
-    if (!el) return;
-
-    // If static IP mode is not enabled, don't send IP-related fields
-    if ((id === 'wifiIp' || id === 'wifiGw' || id === 'wifiMask' || id === 'wifiDns1' || id === 'wifiDns2')) {
-      const localChk = document.querySelector('#wifiStatic');
-      if (!(localChk && localChk.checked)) return;
-    }
-
-    if (el.type === "checkbox") {
-      fd.append(id, el.checked ? "true" : "false");
-    } else {
-      fd.append(id, el.value);
-    }
-  });
-
-  try {
-    const r = await fetch("/api/config", { method:"POST", body:fd });
-    const j = await r.json();
-    if (j.ok) {
-      msg("Configuration enregistrée. Redémarrage en cours…");
-      const start = Date.now();
-      const tryReload = async () => {
-        try {
-          const rr = await fetch("/api/ping",{cache:"no-store"});
-          if (rr.ok) location.reload();
-          else setTimeout(tryReload, 1500);
-        }
-        catch(_) {
-          if (Date.now()-start>25000) location.reload();
-          else setTimeout(tryReload,1500);
-        }
-      };
-      setTimeout(tryReload, 4000);
-    } else {
-      msg("Erreur : " + (j.err || "inconnue"));
-    }
-  } catch(e) {
-    msg("Erreur réseau lors de l'enregistrement.");
-  }
-}
-
-
-
-function setBadge(id, ok, text) {
-  const el = $("#"+id);
-  if (!el) return;
-  el.textContent = text;
-  el.className = ok ? "ok" : "warn";
-}
-
-function formatUptime(sec) {
-  const total = Math.max(0, Number(sec || 0));
-  const days = Math.floor(total / 86400);
-  const hours = Math.floor((total % 86400) / 3600);
-  const mins = Math.floor((total % 3600) / 60);
-  const secs = Math.floor(total % 60);
-  let out = "";
-  if (days > 0) out += days + "d ";
-  out += String(hours).padStart(2, "0") + ":" +
-         String(mins).padStart(2, "0") + ":" +
-         String(secs).padStart(2, "0");
-  return out;
-}
-
-async function loadStatus() {
-  try {
-    const r = await fetch("/api/status", { cache: "no-store" });
-    const j = await r.json();
-
-    // Mode AP
-    setBadge("badgeAp", j.apRunning, j.apRunning ? "actif" : "inactif");
-
-    // Station Wi-Fi
-    let staText;
-    if (j.staConnected) {
-      if (j.ip && j.ip.length) {
-        staText = "connectée (" + j.ip + ")";
-      } else {
-        staText = "connectée";
-      }
-    } else {
-      staText = "déconnectée";
-    }
-    setBadge("badgeSta", j.staConnected, staText);
-    setBadge("badgeUptime", true, formatUptime(j.uptimeSec));
-    setBadge("badgeReset", true, j.resetReason || "inconnu");
-  } catch (e) {
-    setBadge("badgeAp", false, "indisponible");
-    setBadge("badgeSta", false, "indisponible");
-    setBadge("badgeUptime", false, "indisponible");
-    setBadge("badgeReset", false, "indisponible");
-  }
-}
-
-async function pairConnect() {
-  try {
-    msg("Lancement de l'association du Connect…");
-    const r = await fetch("/api/connect/pair", { method:"POST" });
-    const j = await r.json();
-    if (j.ok) {
-      msg(j.msg || "Association Connect lancée. Consultez les logs RADIO.");
-    } else {
-      msg("Erreur association Connect : " + (j.err || "inconnue"));
-    }
-  } catch (e) {
-    msg("Erreur réseau lors de l'association Connect.");
-  }
-}
-
-async function pairSondeExt() {
-  try {
-    msg("Lancement de l'association de la sonde extérieure…");
-    const r = await fetch("/api/sonde-ext/pair", { method:"POST" });
-    const j = await r.json();
-    if (j.ok) {
-      msg(j.msg || "Association sonde extérieure lancée. Consultez les logs RADIO.");
-    } else {
-      msg("Erreur association sonde extérieure : " + (j.err || "inconnue"));
-    }
-  } catch (e) {
-    msg("Erreur réseau lors de l'association de la sonde extérieure.");
-  }
-}
-
-async function pairSatellite(zone) {
-  try {
-    msg("Lancement de l'association du Satellite " + zone + "…");
-    const r = await fetch("/api/satellite/z" + zone.toLowerCase() + "/pair", { method:"POST" });
-    const j = await r.json();
-    if (j.ok) {
-      msg(j.msg || ("Association Satellite " + zone + " lancée. Consultez les logs RADIO."));
-    } else {
-      msg("Erreur association Satellite " + zone + " : " + (j.err || "inconnue"));
-    }
-  } catch (e) {
-    msg("Erreur réseau lors de l'association Satellite " + zone + ".", false);
-  }
-}
-
-async function recupNetworkId() {
-  try {
-    msg("Récupération du NetworkID…");
-    const r = await fetch("/api/network-id/recup", { method:"POST" });
-    const j = await r.json();
-    if (j.ok) {
-      const input = $("#networkID");
-      if (input && j.networkID) input.value = j.networkID;
-      msg(j.msg || "NetworkID récupéré.");
-    } else {
-      msg("Erreur récupération NetworkID : " + (j.err || "inconnue"));
-    }
-  } catch (e) {
-    msg("Erreur réseau lors de la récupération du NetworkID.");
-  }
-}
-
-document.addEventListener("DOMContentLoaded", ()=>{
-  // Toggle password
-  document.querySelectorAll('[data-toggle]').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const sel=btn.getAttribute('data-toggle');
-      const inp=document.querySelector(sel);
-      if(!inp) return;
-      inp.type = (inp.type==='password') ? 'text' : 'password';
-      btn.textContent = (inp.type==='password') ? 'Afficher' : 'Masquer';
-    });
-  });
-
-const form = $("#form");
-  if (form) form.addEventListener("submit", saveConfig);
-
-const fwForm = $("#fwForm");
-if (fwForm) {
-  fwForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const fileInput = $("#fwFile");
-    const btn = $("#fwBtn");
-    if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
-      fwMsg("Sélectionnez un fichier .bin.");
-      return;
-    }
-
-    const file = fileInput.files[0];
-    const fd = new FormData();
-    fd.append("update", file, file.name);
-
-    if (btn) btn.disabled = true;
-    fwMsg("Upload en cours...");
-    try {
-      const res = await fetch("/api/update", { method: "POST", body: fd });
-      let ok = res.ok;
-      let text = "Mise à jour terminée. Redémarrage…";
-      try {
-        const json = await res.json();
-        ok = !!json.ok;
-        if (!ok && json.err) text = json.err;
-      } catch (_) {
-        if (!ok) text = "Mise à jour échouée.";
-      }
-      fwMsg(text);
-    } catch (err) {
-      fwMsg("Erreur réseau pendant l’upload.");
-    } finally {
-      if (btn) btn.disabled = false;
-    }
-  });
-}
-
-  const btnReboot = $("#btnReboot");
-  if (btnReboot) {
-    btnReboot.addEventListener("click", async ()=>{
-      msg("Redémarrage…");
-      try { await fetch("/api/reboot", {method:"POST"}); } catch(_) {}
-      setTimeout(()=>location.reload(), 7000);
-    });
-  }
-
-  const selConnectMode = $("#useConnectMode");
-  const selSondeMode = $("#useSondeMode");
-  const selZoneMode1 = $("#useZoneMode1");
-  const selZoneMode2 = $("#useZoneMode2");
-  const selZoneMode3 = $("#useZoneMode3");
-
-  if (selConnectMode) selConnectMode.addEventListener("change", updatePairButtons);
-  if (selSondeMode) selSondeMode.addEventListener("change", updatePairButtons);
-  if (selZoneMode1) selZoneMode1.addEventListener("change", updatePairButtons);
-  if (selZoneMode2) selZoneMode2.addEventListener("change", updatePairButtons);
-  if (selZoneMode3) selZoneMode3.addEventListener("change", updatePairButtons);
-  const btnPairConnect = $("#btnPairConnect");
-  const btnPairSonde   = $("#btnPairSondeExt");
-  const btnPairSatZ1   = $("#btnPairSatZ1");
-  const btnPairSatZ2   = $("#btnPairSatZ2");
-  const btnPairSatZ3   = $("#btnPairSatZ3");
-  const btnRecupNetworkId = $("#btnRecupNetworkID");
-
-  if (btnPairConnect) btnPairConnect.addEventListener("click", pairConnect);
-  if (btnPairSonde)   btnPairSonde.addEventListener("click", pairSondeExt);
-  if (btnPairSatZ1)   btnPairSatZ1.addEventListener("click", ()=>pairSatellite("1"));
-  if (btnPairSatZ2)   btnPairSatZ2.addEventListener("click", ()=>pairSatellite("2"));
-  if (btnPairSatZ3)   btnPairSatZ3.addEventListener("click", ()=>pairSatellite("3"));
-  if (btnRecupNetworkId) btnRecupNetworkId.addEventListener("click", recupNetworkId);
-
-  // Attach change listener for the wifi static checkbox to update static inputs
-  const chkStatic = $("#wifiStatic");
-  if (chkStatic) chkStatic.addEventListener('change', updateStaticInputs);
-
-  // Handle page show (bfcache/back navigation) to restore UI state
-  window.addEventListener('pageshow', ()=>{ updateStaticInputs(); updatePairButtons(); });
-
-  loadConfig();
-  const scheduleStatusRefresh = async () => {
-    await loadStatus();
-    setTimeout(scheduleStatusRefresh, 5000);
-  };
-  scheduleStatusRefresh();
-});
-</script>
-
-</body></html>
+    async function loadDashboard(){const button=$("#refreshBtn");if(button)button.disabled=true;try{const response=await fetch("/api/dashboard",{cache:"no-store"});if(!response.ok)throw new Error("HTTP "+response.status);render(await response.json())}catch(error){setStatus("#wifiStatus","Données indisponibles","bad");$("#lastUpdate").textContent="Impossible d’actualiser le tableau de bord"}finally{if(button)button.disabled=false}}
+    $("#refreshBtn").addEventListener("click",loadDashboard);loadDashboard();setInterval(loadDashboard,5000);
+  </script>
+</body>
+</html>

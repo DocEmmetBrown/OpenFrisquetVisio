@@ -26,7 +26,10 @@ private:
 
   // Handlers
   void handleIndex();            // GET /
+  void handleSettingsPage();     // GET /settings
+  void handleLogo();             // GET /logo.png
   void handlePing();             // GET /api/ping
+  void handleDashboard();        // GET /api/dashboard
   void handleGetConfig();        // GET /api/config
   void handlePostConfig();       // POST /api/config
   void handleReboot();           // POST /api/reboot
@@ -51,6 +54,7 @@ private:
 
   // Utils
   static String html();
+  static String settingsHtml();
   static String logsHtml();
   static String memoryHtml();
   String logsRadioHtml();

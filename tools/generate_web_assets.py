@@ -10,9 +10,14 @@ OUTPUT_PATH = os.path.join(PROJECT_DIR, "src", "generated", "WebAssets.h")
 
 ASSETS = (
     ("INDEX_HTML", "index.html"),
+    ("SETTINGS_HTML", "settings.html"),
     ("LOGS_HTML", "logs.html"),
     ("MEMORY_HTML", "memory.html"),
     ("RADIO_LOGS_HTML", "radio-logs.html"),
+)
+
+BINARY_ASSETS = (
+    ("LOGO_PNG", "logo.png"),
 )
 
 
@@ -44,12 +49,30 @@ def render_header():
             + "\";\n"
         )
 
+    binary_declarations = []
+    for symbol, filename in BINARY_ASSETS:
+        path = os.path.join(WEB_DIR, filename)
+        with open(path, "rb") as source:
+            content = source.read()
+        rows = []
+        for offset in range(0, len(content), 16):
+            chunk = content[offset : offset + 16]
+            rows.append("  " + ", ".join("0x%02X" % value for value in chunk))
+        binary_declarations.append(
+            "static const uint8_t " + symbol + "[] PROGMEM = {\n"
+            + ",\n".join(rows)
+            + "\n};\n"
+            + "static constexpr size_t " + symbol + "_SIZE = sizeof(" + symbol + ");\n"
+        )
+
     return (
         "// Fichier généré automatiquement depuis web/. Ne pas modifier.\n"
         "#pragma once\n\n"
         "#include <Arduino.h>\n\n"
         "namespace WebAssets {\n\n"
         + "\n".join(declarations)
+        + "\n"
+        + "\n".join(binary_declarations)
         + "\n}  // namespace WebAssets\n"
     )
 

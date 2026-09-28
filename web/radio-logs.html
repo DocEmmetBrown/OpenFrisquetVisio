@@ -4,8 +4,8 @@
 <title>OpenFrisquetVisio – Trames radio</title>
 <style>
   :root{
-    --bg:#0f1115;--card:#171a21;--muted:#8a8f98;--txt:#e7e9ee;
-    --acc:#3aa3ff;--bd:#2a2f39;--ok:#1fb86a;--warn:#ffb020
+    --bg:#f3f6fa;--card:#ffffff;--muted:#687386;--txt:#172033;
+    --acc:#07305f;--bd:#dce3ec;--ok:#178653;--warn:#c86b08
   }
   *,*:before,*:after{box-sizing:border-box}
   body{
@@ -17,7 +17,7 @@
   .wrap{max-width:1280px;margin:0 auto;display:grid;gap:16px}
   .card{
     background:var(--card);border:1px solid var(--bd);border-radius:12px;
-    padding:18px;box-shadow:0 4px 16px rgba(0,0,0,.2)
+    padding:18px;box-shadow:0 12px 32px rgba(31,48,75,.08)
   }
   .toolbar{
     display:flex;flex-wrap:wrap;gap:10px;align-items:center;
@@ -26,16 +26,16 @@
   .badge{
     display:inline-flex;align-items:center;gap:6px;
     padding:6px 10px;border-radius:999px;border:1px solid var(--bd);
-    background:#10131a;font-size:13px
+    background:#f8fafc;font-size:13px
   }
   .btn{
     display:inline-flex;align-items:center;gap:8px;
-    border:1px solid var(--bd);background:#0d1016;color:var(--txt);
+    border:1px solid var(--bd);background:#fff;color:var(--acc);
     padding:10px 14px;border-radius:10px;cursor:pointer;
     text-decoration:none
   }
   .btn.primary{
-    background:var(--acc);color:#061019;border-color:transparent;
+    background:var(--acc);color:#fff;border-color:transparent;
     font-weight:700
   }
   label{
@@ -44,7 +44,7 @@
   }
   select,input[type=text],input[type=checkbox]{
     padding:8px 10px;border:1px solid var(--bd);border-radius:10px;
-    background:#0d1016;color:var(--txt)
+    background:#fff;color:var(--txt)
   }
   #payload {
     width:100%;
@@ -60,7 +60,7 @@
   .topnav{display:flex;align-items:center;gap:10px;margin-bottom:4px}
   .msg{
     margin-top:8px;padding:8px 10px;border-radius:8px;
-    background:#111827;color:#e5e7eb;display:none;font-size:13px
+    background:#f8fafc;color:var(--txt);display:none;font-size:13px
   }
   .msg.show{display:block}
   .msg.err{border:1px solid #b91c1c}

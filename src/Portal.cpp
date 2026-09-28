@@ -136,6 +136,14 @@ static String jsonEscape(const String& s) {
     return out;
 }
 
+static String jsonFloat(float value, unsigned int decimals = 1) {
+  return isfinite(value) ? String(value, decimals) : String("null");
+}
+
+static String jsonIntOrNull(int32_t value) {
+  return value >= 0 ? String(value) : String("null");
+}
+
 // Helper pour parser un bool depuis une string
 static bool parseBoolArg(const String& s, bool defaultVal) {
   String v = s;
@@ -155,7 +163,10 @@ void Portal::begin(bool startApFallbackIfNoWifi) {
   }
 
   _srv.on("/", HTTP_GET, [this]{ handleIndex(); });
+  _srv.on("/settings", HTTP_GET, [this]{ handleSettingsPage(); });
+  _srv.on("/logo.png", HTTP_GET, [this]{ handleLogo(); });
   _srv.on("/api/ping", HTTP_GET, [this]{ handlePing(); });
+  _srv.on("/api/dashboard", HTTP_GET, [this]{ handleDashboard(); });
   _srv.on("/api/config", HTTP_GET, [this]{ handleGetConfig(); });
   _srv.on("/api/config", HTTP_POST, [this]{ handlePostConfig(); });
   _srv.on("/api/reboot", HTTP_POST, [this]{ handleReboot(); });
@@ -240,8 +251,89 @@ void Portal::handleIndex() {
   _srv.send(200, "text/html; charset=utf-8", html());
 }
 
+void Portal::handleSettingsPage() {
+  _srv.send(200, "text/html; charset=utf-8", settingsHtml());
+}
+
+void Portal::handleLogo() {
+  _srv.send_P(200, "image/png",
+              reinterpret_cast<const char*>(WebAssets::LOGO_PNG),
+              WebAssets::LOGO_PNG_SIZE);
+}
+
 void Portal::handlePing() {
   _srv.send(200, "application/json", "{\"ok\":true}");
+}
+
+void Portal::handleDashboard() {
+  auto& cfg = _frisquetManager.config();
+  auto& chaudiere = _frisquetManager.chaudiere();
+  auto etat = chaudiere.getEtatChaudiere();
+
+  String json;
+  json.reserve(2400);
+  json = "{\"ok\":true,";
+  json += "\"version\":\"" + jsonEscape(String(OPENFRISQUETVISIO_VERSION)) + "\",";
+  json += "\"uptimeSec\":" + String(millis() / 1000) + ",";
+  json += "\"connectivity\":{";
+  json += "\"wifiConnected\":" + String(WiFi.isConnected() ? "true" : "false") + ",";
+  json += "\"mqttConnected\":" + String(_frisquetManager.mqtt().connected() ? "true" : "false") + ",";
+  json += "\"ssid\":\"" + jsonEscape(WiFi.isConnected() ? WiFi.SSID() : String()) + "\",";
+  json += "\"ip\":\"" + jsonEscape(WiFi.isConnected() ? WiFi.localIP().toString() : String()) + "\",";
+  json += "\"rssi\":" + String(WiFi.isConnected() ? WiFi.RSSI() : 0);
+  json += "},";
+
+  const bool chaudiereEnabled = cfg.useConnect()
+      || cfg.useSatelliteZ1() || cfg.useSatelliteZ2() || cfg.useSatelliteZ3();
+  json += "\"boiler\":{";
+  json += "\"enabled\":" + String(chaudiereEnabled ? "true" : "false") + ",";
+  json += "\"state\":\"" + jsonEscape(etat.getLibelle()) + "\",";
+  json += "\"anomaly\":" + String(etat.anomalieDetecte() ? "true" : "false") + ",";
+  json += "\"heatingMode\":\"" + jsonEscape(chaudiere.getNomModeFonctionnement()) + "\",";
+  json += "\"hotWaterMode\":\"" + jsonEscape(chaudiere.getNomModeECS()) + "\",";
+  json += "\"outdoorTemperature\":" + jsonFloat(chaudiere.getTemperatureExterieure()) + ",";
+  json += "\"hotWaterTemperature\":" + jsonFloat(chaudiere.getTemperatureECS()) + ",";
+  json += "\"heatingBodyTemperature\":" + jsonFloat(chaudiere.getTemperatureCDC()) + ",";
+  json += "\"flueTemperature\":" + jsonFloat(chaudiere.getTemperatureFumees()) + ",";
+  json += "\"pressure\":" + jsonFloat(chaudiere.getPression(), 2) + ",";
+  json += "\"hotWaterPower\":" + jsonFloat(chaudiere.getPuissanceInstantaneeECS()) + ",";
+  json += "\"heatingPower\":" + jsonFloat(chaudiere.getPuissanceInstantaneeChauffage()) + ",";
+  json += "\"hotWaterConsumption\":" + jsonIntOrNull(chaudiere.getConsommationECS()) + ",";
+  json += "\"heatingConsumption\":" + jsonIntOrNull(chaudiere.getConsommationChauffage());
+  json += "},";
+
+  json += "\"outdoorProbe\":{";
+  json += "\"enabled\":" + String(cfg.useSondeExterieure() ? "true" : "false") + ",";
+  json += "\"temperature\":" + jsonFloat(_frisquetManager.sondeExterieure().getTemperatureExterieure());
+  json += "},";
+
+  json += "\"zones\":[";
+  auto appendZone = [&](uint8_t id, bool enabled, Zone& zone) {
+    const char* source = "Satellite physique";
+    if (zone.getSource() == Zone::SOURCE::CONNECT) source = "Connect";
+    else if (zone.getSource() == Zone::SOURCE::SATELLITE_VIRTUEL) source = "Satellite virtuel";
+
+    json += "{";
+    json += "\"id\":" + String(id) + ",";
+    json += "\"enabled\":" + String(enabled ? "true" : "false") + ",";
+    json += "\"source\":\"" + String(source) + "\",";
+    json += "\"mode\":\"" + jsonEscape(zone.getNomMode()) + "\",";
+    json += "\"boost\":" + String(zone.boostActif() ? "true" : "false") + ",";
+    json += "\"ambientTemperature\":" + jsonFloat(zone.getTemperatureAmbiante()) + ",";
+    json += "\"setpointTemperature\":" + jsonFloat(zone.getTemperatureConsigne()) + ",";
+    json += "\"flowTemperature\":" + jsonFloat(zone.getTemperatureDepart()) + ",";
+    json += "\"flowSetpointTemperature\":" + jsonFloat(zone.getTemperatureConsigneDepart());
+    json += "}";
+  };
+
+  appendZone(1, cfg.useZone1(), _frisquetManager.connect().getZone1());
+  json += ",";
+  appendZone(2, cfg.useZone2(), _frisquetManager.connect().getZone2());
+  json += ",";
+  appendZone(3, cfg.useZone3(), _frisquetManager.connect().getZone3());
+  json += "]}";
+
+  _srv.send(200, "application/json; charset=utf-8", json);
 }
 
 void Portal::handleGetConfig() {
@@ -1215,6 +1307,12 @@ void Portal::startAp() {
 
 String Portal::html() {
   String page(FPSTR(WebAssets::INDEX_HTML));
+  page.replace("{{OPENFRISQUETVISIO_VERSION}}", OPENFRISQUETVISIO_VERSION);
+  return page;
+}
+
+String Portal::settingsHtml() {
+  String page(FPSTR(WebAssets::SETTINGS_HTML));
   page.replace("{{OPENFRISQUETVISIO_VERSION}}", OPENFRISQUETVISIO_VERSION);
   return page;
 }

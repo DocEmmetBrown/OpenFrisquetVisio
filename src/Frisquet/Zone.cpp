@@ -507,13 +507,13 @@ uint8_t Zone::getNumeroZone() {
 bool Zone::confortActif() {
     return 
         _mode == MODE_ZONE::CONFORT || 
-        _mode == MODE_ZONE::AUTO && (_modeOptions &= 0b00000001 == 1);
+        (_mode == MODE_ZONE::AUTO && (_modeOptions & 0b00000001) != 0);
 }
 
 bool Zone::reduitActif() {
     return 
         _mode == MODE_ZONE::REDUIT || 
-        _mode == MODE_ZONE::AUTO && (_modeOptions &= 0b00000001 == 0);
+        (_mode == MODE_ZONE::AUTO && (_modeOptions & 0b00000001) == 0);
 }
 
 bool Zone::horsGelActif() {
@@ -522,7 +522,7 @@ bool Zone::horsGelActif() {
 
 bool Zone::derogationActive() {
     return 
-        _mode == MODE_ZONE::AUTO && (_modeOptions &= 0b00000010 == 1);
+        _mode == MODE_ZONE::AUTO && (_modeOptions & 0b00000010) != 0;
 }
 
 
