@@ -82,6 +82,11 @@ public:
     return publishRaw(d.availabilityTopic.full, online ? d.payloadAvailable : d.payloadNotAvailable, 1, true);
   }
 
+  bool publishAvailability(const MqttEntity& e, bool online) {
+    return publishRaw(e.availabilityTopic.full, online ? e.payloadAvailable : e.payloadNotAvailable,
+                      e.availabilityTopic.qos, e.availabilityTopic.retain);
+  }
+
   bool publishState(const MqttEntity& e, const String& payload) {
     if (!e.stateTopic.full.length()) return false;
     return publishRaw(e.stateTopic.full, payload, e.stateTopic.qos, e.stateTopic.retain);

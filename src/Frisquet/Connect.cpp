@@ -52,6 +52,15 @@ bool Connect::envoyerZone(Zone& zone) {
     } else if(zone.getIdZone() == ID_ZONE_3 && getConfig().useSatelliteVirtualZ3()) {
         return true;
     }
+
+    const bool satellitePhysique =
+        (zone.getIdZone() == ID_ZONE_1 && getConfig().useSatelliteZ1()) ||
+        (zone.getIdZone() == ID_ZONE_2 && getConfig().useSatelliteZ2()) ||
+        (zone.getIdZone() == ID_ZONE_3 && getConfig().useSatelliteZ3());
+    if(satellitePhysique && !zone.programmationRecue()) {
+        info("[CONNECT] Zone %d en attente d'une programmation connue (radio ou mémoire).", zone.getNumeroZone());
+        return false;
+    }
     
     struct {
         temperature8 temperatureConfort;    // Début 5°C -> 0 = 50 = 5°C - MAX 30°C
@@ -59,17 +68,13 @@ bool Connect::envoyerZone(Zone& zone) {
         temperature8 temperatureHorsGel;     // Début 5°C -> 0 = 50 = 5°C - MAX Hors gel
         uint8_t mode = 0x00; 
         byte modeOptions = 0b00000100;
-        /*
-        Mode Option structure bits
-            inconnu1: 1 bit,
-            boost: 1 bit,
-            inconnu2: 2 bits,
-            inconnu3: 2 bits,
-            derogation: 1 bit,
-            confort: 1 bit
-        */
+        // Hypothèse : mêmes bits de mode que Satellite::MODE (voir Zone.h).
+        // 0x10 Hors Gel, 0x04 Auto, 0x02 Dérogation, 0x01 Confort.
+        // Boost (0x40) et bits non interprétés conservés par Zone::setMode().
         byte inconnu1 = 0x00;
+        Zone::Programmation programmation;
     } payload;
+    static_assert(sizeof(payload) == 48, "La configuration zone doit contenir 48 octets");
     
     if(zone.boostActif()) {
         payload.temperatureConfort = zone.getTemperatureConfort() + zone.getTemperatureBoost();
@@ -80,6 +85,7 @@ bool Connect::envoyerZone(Zone& zone) {
     payload.temperatureHorsGel = zone.getTemperatureHorsGel();
     payload.mode = zone.getMode();
     payload.modeOptions = zone.getModeOptions();
+    payload.programmation = zone.getProgrammation();
     
     byte buff[RADIOLIB_SX126X_MAX_PACKET_LENGTH];
     size_t length = 0;
@@ -96,7 +102,7 @@ bool Connect::envoyerZone(Zone& zone) {
             0xA154,
             0x0018,
             0xa154,
-            0x0003,
+            0x0018,
             (byte*)&payload,
             sizeof(payload),
             buff,
@@ -645,16 +651,10 @@ bool Connect::onReceive(byte* donnees, size_t length) {
                 uint8_t mode = 0x00; 
                 byte modeOptions = 0b00000100;
                 byte inconnu1 = 0x00;
-                byte dimanche[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-                byte lundi[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-                byte mardi[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-                byte mercredi[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-                byte jeudi[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-                byte vendredi[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-                byte samedi[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+                Zone::Programmation programmation;
             } donneesZone;
 
-            if(readBuffer.remainingLength() < sizeof(donneesZone)) { return false; }
+            if(requete.longueurDonneesEcriture != sizeof(donneesZone) || readBuffer.remainingLength() < sizeof(donneesZone)) { return false; }
             readBuffer.getBytes((byte*)&donneesZone, sizeof(donneesZone));
 
             // Le champ `idReception` peut contenir le bit 0x80 (ACK) : Ajout d'un masque
@@ -665,14 +665,18 @@ bool Connect::onReceive(byte* donnees, size_t length) {
                 return false;
             }
 
-            getZone(zoneId).setMode((Zone::MODE_ZONE)donneesZone.mode);
-            getZone(zoneId).setModeOptions(donneesZone.modeOptions);
-            getZone(zoneId).setTemperatureReduit(donneesZone.temperatureReduit.toFloat());
-            getZone(zoneId).setTemperatureHorsGel(donneesZone.temperatureHorsGel.toFloat());
-            if(getZone(zoneId).boostActif()) {
-                //getZone(zoneId).setTemperatureBoost(donneesZone.temperatureConfort.toFloat());
-            } else {
-                getZone(zoneId).setTemperatureConfort(donneesZone.temperatureConfort.toFloat());
+            getZone(zoneId).setProgrammation(donneesZone.programmation, true);
+            // Conserver une commande locale en attente pendant l'acquisition.
+            if(!getZone(zoneId).programmationEnvoiEnAttente() && getZone(zoneId).getLastChange() <= getZone(zoneId).getLastEnvoi()) {
+                getZone(zoneId).setMode((Zone::MODE_ZONE)donneesZone.mode);
+                getZone(zoneId).setModeOptions(donneesZone.modeOptions);
+                getZone(zoneId).setTemperatureReduit(donneesZone.temperatureReduit.toFloat());
+                getZone(zoneId).setTemperatureHorsGel(donneesZone.temperatureHorsGel.toFloat());
+                if(getZone(zoneId).boostActif()) {
+                    //getZone(zoneId).setTemperatureBoost(donneesZone.temperatureConfort.toFloat());
+                } else {
+                    getZone(zoneId).setTemperatureConfort(donneesZone.temperatureConfort.toFloat());
+                }
             }
 
             //Sauvegarde de la conf de la zone en NVs
@@ -782,7 +786,7 @@ void Connect::loop() {
 
 void Connect::envoiZones() {
     if(estAssocie()) {
-        if(getConfig().useZone1() && getZone1().getSource() == Zone::SOURCE::CONNECT && _zone1.getLastChange() > _zone1.getLastEnvoi()) {
+        if(getConfig().useZone1() && getZone1().getSource() == Zone::SOURCE::CONNECT && (_zone1.programmationEnvoiEnAttente() || _zone1.getLastChange() > _zone1.getLastEnvoi())) {
             info("[CONNECT] Envoi de la zone 1.");
             if(envoyerZone(_zone1)) {
                 info("[CONNECT] Envoi réussi !");
@@ -791,7 +795,7 @@ void Connect::envoiZones() {
                 _envoiZ1 = false;
             }
         }
-        if(getConfig().useZone2() && getZone2().getSource() == Zone::SOURCE::CONNECT && _zone2.getLastChange() > _zone2.getLastEnvoi()) {
+        if(getConfig().useZone2() && getZone2().getSource() == Zone::SOURCE::CONNECT && (_zone2.programmationEnvoiEnAttente() || _zone2.getLastChange() > _zone2.getLastEnvoi())) {
             info("[CONNECT] Envoi de la zone 2 (id=%d numero=%d).", _zone2.getIdZone(), _zone2.getNumeroZone());
             if(envoyerZone(_zone2)) {
                 info("[CONNECT] Envoi réussi !");
@@ -800,7 +804,7 @@ void Connect::envoiZones() {
                 _envoiZ2 = false;
             }
         }
-        if(getConfig().useZone3() && getZone3().getSource() == Zone::SOURCE::CONNECT && _zone3.getLastChange() > _zone3.getLastEnvoi()) {
+        if(getConfig().useZone3() && getZone3().getSource() == Zone::SOURCE::CONNECT && (_zone3.programmationEnvoiEnAttente() || _zone3.getLastChange() > _zone3.getLastEnvoi())) {
             info("[CONNECT] Envoi de la zone 3 (id=%d numero=%d).", _zone3.getIdZone(), _zone3.getNumeroZone());
             if(envoyerZone(_zone3)) {
                 info("[CONNECT] Envoi réussi !");

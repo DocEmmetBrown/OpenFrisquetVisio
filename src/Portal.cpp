@@ -167,6 +167,9 @@ void Portal::begin(bool startApFallbackIfNoWifi) {
   _srv.on("/logo.png", HTTP_GET, [this]{ handleLogo(); });
   _srv.on("/api/ping", HTTP_GET, [this]{ handlePing(); });
   _srv.on("/api/dashboard", HTTP_GET, [this]{ handleDashboard(); });
+  _srv.on("/programming", HTTP_GET, [this]{ handleProgrammationPage(); });
+  _srv.on("/api/programming", HTTP_GET, [this]{ handleGetProgrammation(); });
+  _srv.on("/api/programming", HTTP_POST, [this]{ handlePostProgrammation(); });
   _srv.on("/api/config", HTTP_GET, [this]{ handleGetConfig(); });
   _srv.on("/api/config", HTTP_POST, [this]{ handlePostConfig(); });
   _srv.on("/api/reboot", HTTP_POST, [this]{ handleReboot(); });
@@ -255,6 +258,100 @@ void Portal::handleSettingsPage() {
   _srv.send(200, "text/html; charset=utf-8", settingsHtml());
 }
 
+void Portal::handleProgrammationPage() {
+  _srv.send(200, "text/html; charset=utf-8", programmationHtml());
+}
+
+static String programmationHex(const Zone::Programmation& programmation) {
+  static_assert(sizeof(Zone::Programmation) == 42, "Programmation : 42 octets");
+  const byte* bytes = reinterpret_cast<const byte*>(&programmation);
+  const char* digits = "0123456789ABCDEF";
+  String hex;
+  hex.reserve(84);
+  for(size_t i = 0; i < sizeof(programmation); ++i) {
+    hex += digits[bytes[i] >> 4];
+    hex += digits[bytes[i] & 0x0F];
+  }
+  return hex;
+}
+
+static String programmationRevision(Zone& zone) {
+  return String(zone.programmationRecue() ? "1" : "0") + programmationHex(zone.getProgrammation());
+}
+
+static String programmationReadOnlyReason(Config& cfg, Connect& connect, Zone& zone, bool enabled) {
+  if(!enabled) return "Cette zone est désactivée.";
+  if(!cfg.useConnect()) return "Activez le Connect virtuel pour modifier la programmation.";
+  if(cfg.useConnectPassive()) return "Le Connect est en écoute passive : programmation en lecture seule.";
+  if(zone.getSource() != Zone::SOURCE::CONNECT) return "La modification de programmation nécessite une zone pilotée par le Connect.";
+  if(!connect.estAssocie()) return "Associez le Connect avant de modifier la programmation.";
+  if(zone.getMode() == Zone::MODE_ZONE::INCONNU || isnan(zone.getTemperatureConfort()) ||
+     isnan(zone.getTemperatureReduit()) || isnan(zone.getTemperatureHorsGel())) {
+    return "Les paramètres de la zone doivent être récupérés avant de modifier sa programmation.";
+  }
+  return "";
+}
+
+void Portal::handleGetProgrammation() {
+  auto& cfg = _frisquetManager.config();
+  auto& connect = _frisquetManager.connect();
+  const bool enabled[] = {cfg.useZone1(), cfg.useZone2(), cfg.useZone3()};
+  Zone* zones[] = {&connect.getZone1(), &connect.getZone2(), &connect.getZone3()};
+  String json = "{\"ok\":true,\"zones\":[";
+  json.reserve(1600);
+  for(uint8_t i = 0; i < 3; ++i) {
+    Zone& zone = *zones[i];
+    String reason = programmationReadOnlyReason(cfg, connect, zone, enabled[i]);
+    if(i) json += ",";
+    json += "{\"id\":" + String(i + 1);
+    json += ",\"enabled\":" + String(enabled[i] ? "true" : "false");
+    json += ",\"editable\":" + String(reason.isEmpty() ? "true" : "false");
+    json += ",\"reason\":\"" + jsonEscape(reason) + "\"";
+    json += ",\"known\":" + String(zone.programmationRecue() ? "true" : "false");
+    json += ",\"pending\":" + String(zone.programmationEnvoiEnAttente() ? "true" : "false");
+    json += ",\"mode\":\"" + jsonEscape(zone.getNomMode()) + "\"";
+    json += ",\"program\":\"" + programmationHex(zone.getProgrammation()) + "\"";
+    json += ",\"revision\":\"" + programmationRevision(zone) + "\"}";
+  }
+  json += "]}";
+  _srv.sendHeader("Cache-Control", "no-store");
+  _srv.send(200, "application/json; charset=utf-8", json);
+}
+
+void Portal::handlePostProgrammation() {
+  String numero = _srv.arg("zone");
+  if(numero != "1" && numero != "2" && numero != "3") {
+    _srv.send(400, "application/json; charset=utf-8", "{\"ok\":false,\"err\":\"Zone invalide.\"}");
+    return;
+  }
+  auto& cfg = _frisquetManager.config();
+  auto& connect = _frisquetManager.connect();
+  const bool enabled[] = {cfg.useZone1(), cfg.useZone2(), cfg.useZone3()};
+  Zone* zones[] = {&connect.getZone1(), &connect.getZone2(), &connect.getZone3()};
+  const uint8_t index = numero.toInt() - 1;
+  Zone& zone = *zones[index];
+  String reason = programmationReadOnlyReason(cfg, connect, zone, enabled[index]);
+  if(!reason.isEmpty()) {
+    _srv.send(409, "application/json; charset=utf-8", "{\"ok\":false,\"err\":\"" + jsonEscape(reason) + "\"}");
+    return;
+  }
+  Zone::Programmation programmation;
+  size_t length = 0;
+  String hex = _srv.arg("program");
+  if(hex.length() != 84 || !hexStringToBufferRaw(hex, reinterpret_cast<byte*>(&programmation), sizeof(programmation), length) || length != sizeof(programmation)) {
+    _srv.send(400, "application/json; charset=utf-8", "{\"ok\":false,\"err\":\"Programmation invalide : sept journées complètes sont nécessaires.\"}");
+    return;
+  }
+  if(_srv.arg("revision") != programmationRevision(zone)) {
+    _srv.send(409, "application/json; charset=utf-8", "{\"ok\":false,\"err\":\"La programmation a changé depuis son chargement. Rechargez-la avant d’enregistrer.\"}");
+    return;
+  }
+  zone.modifierProgrammation(programmation);
+  zone.saveConfig();
+  info("[PORTAIL] Programmation de la zone %d enregistrée, en attente d'envoi Connect.", index + 1);
+  _srv.send(200, "application/json; charset=utf-8", "{\"ok\":true,\"revision\":\"" + programmationRevision(zone) + "\",\"pending\":true}");
+}
+
 void Portal::handleLogo() {
   _srv.send_P(200, "image/png",
               reinterpret_cast<const char*>(WebAssets::LOGO_PNG),
@@ -273,6 +370,7 @@ void Portal::handleDashboard() {
   String json;
   json.reserve(2400);
   json = "{\"ok\":true,";
+  json += "\"developerMode\":" + String(cfg.developerMode() ? "true" : "false") + ",";
   json += "\"version\":\"" + jsonEscape(String(OPENFRISQUETVISIO_VERSION)) + "\",";
   json += "\"uptimeSec\":" + String(millis() / 1000) + ",";
   json += "\"connectivity\":{";
@@ -341,6 +439,7 @@ void Portal::handleGetConfig() {
   auto& m = _frisquetManager.config().getMQTTOptions();
 
   String json = "{";
+  json += "\"developerMode\":" + String(_frisquetManager.config().developerMode() ? "true" : "false") + ",";
   json += "\"wifiHostname\":\"" + jsonEscape(String(w.hostname)) + "\",";
   json += "\"wifiSsid\":\"" + jsonEscape(String(w.ssid)) + "\",";
   json += "\"wifiPass\":\"" + jsonEscape(String(w.password)) + "\",";
@@ -554,6 +653,11 @@ void Portal::handlePostConfig() {
     _frisquetManager.config().useSatelliteVirtualZ3(v);
   }
 
+  if (_srv.hasArg("developerMode")) {
+    auto& cfg = _frisquetManager.config();
+    cfg.developerMode(parseBoolArg(_srv.arg("developerMode"), cfg.developerMode()));
+  }
+
   _frisquetManager.config().save();
   info("[PORTAIL] Configuration enregistrée, redémarrage programmé");
 
@@ -594,6 +698,8 @@ void Portal::handleGetLogs() {
   if (_srv.hasArg("level")) {
     level = _srv.arg("level");
   }
+
+  if (level.equalsIgnoreCase("RADIO") && !requireDeveloperMode()) return;
 
   size_t outCount = logs.getLines(s_logLines, kMaxQueryLines, limit,
                                   level.length() > 0 ? level.c_str() : nullptr);
@@ -699,6 +805,7 @@ void Portal::handleStatus() {
 }
 
 void Portal::handleSendRadio() {
+  if (!requireDeveloperMode()) return;
   if (_srv.method() != HTTP_POST) {
     _srv.send(405, "application/json; charset=utf-8",
               "{\"ok\":false,\"err\":\"Méthode non autorisée\"}");
@@ -754,11 +861,20 @@ void Portal::handleSendRadio() {
   }
 }
 
+bool Portal::requireDeveloperMode() {
+  if (_frisquetManager.config().developerMode()) return true;
+  _srv.send(403, "application/json; charset=utf-8",
+            "{\"ok\":false,\"err\":\"Activez le mode développeur dans les paramètres système.\"}");
+  return false;
+}
+
 void Portal::handleRadioLogsPage() {
+  if (!requireDeveloperMode()) return;
   _srv.send(200, "text/html; charset=utf-8", logsRadioHtml());
 }
 
 void Portal::handleMemoryRead() {
+  if (!requireDeveloperMode()) return;
   if (_srv.method() != HTTP_GET) {
     _srv.send(405, "application/json; charset=utf-8",
               "{\"ok\":false,\"err\":\"Méthode non autorisée\"}");
@@ -910,6 +1026,7 @@ void Portal::handleMemoryRead() {
 }
 
 void Portal::handleMemoryScan() {
+  if (!requireDeveloperMode()) return;
   if (_srv.method() != HTTP_GET) {
     _srv.send(405, "application/json; charset=utf-8",
               "{\"ok\":false,\"err\":\"Méthode non autorisée\"}");
@@ -1040,6 +1157,7 @@ void Portal::handleMemoryScan() {
 }
 
 void Portal::handleMemoryPage() {
+  if (!requireDeveloperMode()) return;
   _srv.send(200, "text/html; charset=utf-8", memoryHtml());
 }
 
@@ -1313,6 +1431,12 @@ String Portal::html() {
 
 String Portal::settingsHtml() {
   String page(FPSTR(WebAssets::SETTINGS_HTML));
+  page.replace("{{OPENFRISQUETVISIO_VERSION}}", OPENFRISQUETVISIO_VERSION);
+  return page;
+}
+
+String Portal::programmationHtml() {
+  String page(FPSTR(WebAssets::PROGRAMMING_HTML));
   page.replace("{{OPENFRISQUETVISIO_VERSION}}", OPENFRISQUETVISIO_VERSION);
   return page;
 }

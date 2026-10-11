@@ -11,6 +11,7 @@ OUTPUT_PATH = os.path.join(PROJECT_DIR, "src", "generated", "WebAssets.h")
 ASSETS = (
     ("INDEX_HTML", "index.html"),
     ("SETTINGS_HTML", "settings.html"),
+    ("PROGRAMMING_HTML", "programming.html"),
     ("LOGS_HTML", "logs.html"),
     ("MEMORY_HTML", "memory.html"),
     ("RADIO_LOGS_HTML", "radio-logs.html"),

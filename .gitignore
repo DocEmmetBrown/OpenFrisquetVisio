@@ -9,3 +9,4 @@ platformio.ini
 docs/
 tools/*
 !tools/generate_web_assets.py
+tests/*

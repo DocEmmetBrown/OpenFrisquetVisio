@@ -14,6 +14,7 @@ class Config {
         Preferences _preferences;
 
         bool _useConnect = false;
+        bool _developerMode = false;
         bool _useConnectPassive = false;
         bool _useSondeExterieure = false;
         bool _useDS18B20 = false;
@@ -30,6 +31,9 @@ class Config {
         Config();
         void load();
         void save();
+
+        bool developerMode() const { return _developerMode; }
+        void developerMode(bool enabled) { _developerMode = enabled; }
 
         NetworkManager::Options& getWiFiOptions() { return _wifiOpts; }
         MqttManager::Options& getMQTTOptions() { return _mqttOpts; }

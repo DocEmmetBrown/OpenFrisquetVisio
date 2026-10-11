@@ -425,11 +425,36 @@ bool Satellite::envoyerConsigne() {
 }
 
 bool Satellite::onReceive(byte* donnees, size_t length) { 
+    if(length < sizeof(FrisquetRadio::RadioTrameHeader)) {
+        return false;
+    }
     ReadBuffer readBuffer(donnees, length);
     FrisquetRadio::RadioTrameHeader* header = (FrisquetRadio::RadioTrameHeader*) readBuffer.getBytes(sizeof(FrisquetRadio::RadioTrameHeader));
 
     //info("[SATELLITE Z] Interception envoi consigne.", header->type);
     if(!_modeVirtuel) {
+
+        // Les échanges de consigne de 23 octets ne contiennent pas le programme.
+        // Attendre une écriture complète A154 : paramètres (6) + programme (42).
+        if(header->type == FrisquetRadio::MessageType::INIT &&
+           header->idExpediteur == getId() && !header->isAck() &&
+           readBuffer.remainingLength() >= sizeof(FrisquetRadio::RadioTrameInit)) {
+            ReadBuffer configurationBuffer = readBuffer;
+            FrisquetRadio::RadioTrameInit requete;
+            configurationBuffer.getBytes((byte*)&requete, sizeof(requete));
+            if(requete.adresseMemoireEcriture.toUInt16() == 0xA154 &&
+               requete.tailleMemoireEcriture.toUInt16() == 0x0018 &&
+               requete.longueurDonneesEcriture == 48 && configurationBuffer.remainingLength() >= 48) {
+                byte parametres[6];
+                configurationBuffer.getBytes(parametres, sizeof(parametres));
+                Zone::Programmation programmation;
+                configurationBuffer.getBytes((byte*)&programmation, sizeof(programmation));
+                _zone.setProgrammation(programmation, true);
+                _zone.saveConfig();
+                info("[SATELLITE Z%d] Programmation hebdomadaire reçue.", getNumeroZone());
+                return true;
+            }
+        }
 
         if(length == 23 && header->type == FrisquetRadio::MessageType::INIT && header->idExpediteur == this->getId() && header->idMessage != getIdMessage()) { // Réception en écoute
             FrisquetRadio::RadioTrameInit* requete = (FrisquetRadio::RadioTrameInit*) readBuffer.getBytes(sizeof(FrisquetRadio::RadioTrameInit));

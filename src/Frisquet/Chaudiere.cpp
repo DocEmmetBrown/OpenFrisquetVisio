@@ -32,6 +32,7 @@ void Chaudiere::begin(std::function<void(const String&)> modeEcsCommandCb) {
     _mqttEntities.tempECS.name = "Température ECS";
     _mqttEntities.tempECS.component = "sensor";
     _mqttEntities.tempECS.stateTopic = MqttTopic(MqttManager::compose({device->baseTopic, "chaudiere", "temperatureECS"}), 0, true);
+    _mqttEntities.tempECS.availabilityTopic = MqttTopic(MqttManager::compose({device->baseTopic, "chaudiere", "temperatureECS", "availability"}), 0, true);
     _mqttEntities.tempECS.commandTopic = MqttTopic(MqttManager::compose({device->baseTopic, "chaudiere", "temperatureECS", "set"}), 0, true);
     _mqttEntities.tempECS.set("device_class", "temperature");
     _mqttEntities.tempECS.set("state_class", "measurement");
@@ -134,9 +135,14 @@ void Chaudiere::publishMqtt() {
     _mqtt.publishState(_mqttEntities.anomalieChaudiere, getEtatChaudiere().anomalieDetecte() ? "ON" : "OFF");
     _mqtt.publishState(_mqttEntities.modeFonctionnement, getNomModeFonctionnement());
 
-    if (!isnan(getTemperatureECS())) {
+    const bool temperatureEcsDisponible = isfinite(getTemperatureECS());
+    if (temperatureEcsDisponible) {
         _mqtt.publishState(_mqttEntities.tempECS, getTemperatureECS());
+    } else {
+        // Remplacer aussi l'ancienne valeur retenue ("None" = état inconnu dans HA).
+        _mqtt.publishState(_mqttEntities.tempECS, "None");
     }
+    _mqtt.publishAvailability(_mqttEntities.tempECS, temperatureEcsDisponible);
     if (!isnan(getTemperatureCDC())) {
         _mqtt.publishState(_mqttEntities.tempCDC, getTemperatureCDC());
     }
@@ -213,7 +219,8 @@ String Chaudiere::getNomModeFonctionnement() const {
 }
 
 void Chaudiere::setTemperatureECS(float temperature) {
-    _temperatureECS = temperature;
+    // 0x04F6 en dixièmes = 127 °C : sentinelle indiquant une ECS non gérée.
+    _temperatureECS = temperature == 127.0f ? NAN : temperature;
 }
 
 void Chaudiere::setTemperatureCDC(float temperature) {

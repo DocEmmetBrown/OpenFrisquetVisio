@@ -48,6 +48,7 @@ Deux modes possibles :
 
 ### 🌐 Portail Web intégré
 - Configuration du **WiFi** et du **MQTT**
+- **Programmation hebdomadaire** : créneaux Confort/Réduit de 30 minutes, copie de journées et sauvegarde persistante pour les zones pilotées par un Connect actif. Accessible depuis le tableau de bord ou `/programming`.
 - Visualisation des **logs**
 - Informations système et réseau
 - Envoi de trame radio personnalisée (debug)
@@ -56,6 +57,15 @@ Deux modes possibles :
 Les pages du portail se trouvent dans le dossier **`web/`**. Lors d'une compilation
 PlatformIO, `tools/generate_web_assets.py` les transforme automatiquement en
 ressources C++ stockées dans le firmware.
+
+La programmation est envoyée avec le bloc complet de configuration de la zone au
+prochain cycle du Connect. Son utilisation nécessite le mode Auto ; enregistrer
+la semaine ne change pas le mode de chauffage. Les zones en écoute passive ou
+pilotées par un satellite virtuel sont affichées en lecture seule.
+
+Les tests du codage des demi-heures et de la sauvegarde se lancent avec
+`node --test tests/programming.test.mjs` et
+`python3 tests/test_programming_state.py` (compilateur C++ requis).
 
 ### 🔁 Mise à jour OTA
 - Mise à jour du firmware directement via WiFi
@@ -182,4 +192,4 @@ Mais bon, si ça marche, vous pouvez toujours m’offrir un café ☕ 😉
 **Année :** 2025  
 **Plateforme :** ESP32 (Heltec WiFi LoRa 32, SX1262)  
 **Compatibilité :** Home Assistant, MQTT, Frisquet Chaudière série Eco Radio Visio  
-**Version :** 26.09.28.1458
+**Version :** 26.10.09.1453

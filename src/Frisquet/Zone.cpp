@@ -16,8 +16,14 @@ void Zone::loadConfig() {
     setTemperatureConsigne(_preferences.getFloat("tempConsigne", NAN));
 
     Zone::Programmation programmation;
-    _preferences.getBytes("prog", &programmation, sizeof(Zone::Programmation));
-    setProgrammation(programmation);
+    const size_t tailleProgrammation = _preferences.getBytes("prog", &programmation, sizeof(programmation));
+    _programmationRecue = false;
+    setProgrammation(programmation,
+        tailleProgrammation == sizeof(programmation) && _preferences.getBool("progValid", false));
+    if(programmationRecue() && _preferences.getBool("progPending", false)) {
+        _programmationEnvoiEnAttente = true;
+        refreshLastChange();
+    }
 
     _preferences.end();
 }
@@ -31,7 +37,9 @@ void Zone::saveConfig() {
     _preferences.putFloat("tempReduit", getTemperatureReduit());
     _preferences.putFloat("tempHorsGel", getTemperatureHorsGel());
     _preferences.putFloat("tempBoost", getTemperatureBoost());
-    _preferences.putBytes("prog", &getProgrammation(), sizeof(getProgrammation()));
+    const size_t tailleProgrammation = _preferences.putBytes("prog", &getProgrammation(), sizeof(getProgrammation()));
+    _preferences.putBool("progValid", programmationRecue() && tailleProgrammation == sizeof(getProgrammation()));
+    _preferences.putBool("progPending", programmationEnvoiEnAttente());
     _preferences.putFloat("tempAmbiante", getTemperatureAmbiante());
     _preferences.putFloat("tempConsigne", getTemperatureConsigne());
 
@@ -426,13 +434,27 @@ Zone::MODE_ZONE Zone::getMode() {
 
 void Zone::setMode(MODE_ZONE mode, bool confort, bool derogation) {
     _mode = mode;
-    if(_mode == MODE_ZONE::AUTO) {
-        if(confort) _modeOptions |= 0b00000001;
-        else _modeOptions &= ~0b00000001;
-
-        if(derogation) _modeOptions |= 0b00000010;
-        else _modeOptions &= ~0b00000010;
+    byte optionsMode;
+    switch(mode) {
+        case MODE_ZONE::AUTO:
+            optionsMode = 0x04 | (confort ? 0x01 : 0x00) | (derogation ? 0x02 : 0x00);
+            break;
+        case MODE_ZONE::CONFORT:
+            optionsMode = 0x01;
+            break;
+        case MODE_ZONE::REDUIT:
+            optionsMode = 0x00;
+            break;
+        case MODE_ZONE::HORS_GEL:
+            optionsMode = 0x10;
+            break;
+        default:
+            return;
     }
+
+    // Même codage que Satellite::MODE pour les bits Confort, Dérogation,
+    // Auto et Hors Gel. Préserver le Boost et les bits non interprétés.
+    _modeOptions = (_modeOptions & ~0x17) | optionsMode;
 }
 void Zone::setMode(const String& mode, bool confort, bool derogation) {
   if (mode.equalsIgnoreCase("Auto")) {

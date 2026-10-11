@@ -30,6 +30,9 @@ private:
   void handleLogo();             // GET /logo.png
   void handlePing();             // GET /api/ping
   void handleDashboard();        // GET /api/dashboard
+  void handleProgrammationPage();
+  void handleGetProgrammation();
+  void handlePostProgrammation();
   void handleGetConfig();        // GET /api/config
   void handlePostConfig();       // POST /api/config
   void handleReboot();           // POST /api/reboot
@@ -53,8 +56,10 @@ private:
 
 
   // Utils
+  bool requireDeveloperMode();
   static String html();
   static String settingsHtml();
+  static String programmationHtml();
   static String logsHtml();
   static String memoryHtml();
   String logsRadioHtml();
