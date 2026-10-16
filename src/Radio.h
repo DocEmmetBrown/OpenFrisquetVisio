@@ -3,6 +3,7 @@
 #include <heltec.h>
 #include <RadioLib.h>
 #include <math.h>
+#include "RadioSettings.h"
 
 #define SS GPIO_NUM_8
 #define RST_LoRa GPIO_NUM_12
@@ -13,7 +14,8 @@ class Radio {
 
     public:
         Radio();
-        void init();
+        void init(float rxBandwidth = RadioSettings::DEFAULT_RX_BANDWIDTH,
+                  bool lnaBypass = RadioSettings::DEFAULT_LNA_BYPASS);
 
         int16_t startReceive() { return _radio.startReceive(); }
         int16_t receive(uint8_t data[], size_t len);

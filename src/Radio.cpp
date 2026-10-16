@@ -90,7 +90,7 @@ constexpr uint8_t KCT8103L_CTX_PIN = GPIO_NUM_5;
 
 Radio::Radio() : _radio(new Module(SS, DIO0, RST_LoRa, BUSY_LoRa)) {}
 
-void Radio::init() {
+void Radio::init(float rxBandwidth, bool lnaBypass) {
 #if defined(WIFI_LORA_32_V4) && defined(USE_KCT8103L_PA)
     // Heltec WiFi LoRa 32 V4.3: power and enable the KCT8103L FEM.
     pinMode(KCT8103L_POWER_PIN, OUTPUT);
@@ -110,17 +110,25 @@ void Radio::init() {
         { Module::MODE_TX,   { HIGH } },
         END_OF_MODE_TABLE,
     };
-    _radio.setRfSwitchTable(rfSwitchPins, rfSwitchTable);
-    info("[RADIO] KCT8103L : bypass du LNA configuré en réception (GPIO5 HIGH).");
+    if (lnaBypass) {
+        _radio.setRfSwitchTable(rfSwitchPins, rfSwitchTable);
+    } else {
+        // RX : GPIO5 LOW (LNA actif). TX : GPIO5 HIGH (PA actif).
+        _radio.setRfSwitchPins(RADIOLIB_NC, KCT8103L_CTX_PIN);
+    }
+    info("[RADIO] KCT8103L : bypass du LNA %s en réception.", lnaBypass ? "activé" : "désactivé");
 #endif
 
     _radio.beginFSK();
     _radio.setFrequency(868.96);
     _radio.setBitRate(25.0);
     _radio.setFrequencyDeviation(50.0);
-    const int16_t bandwidthResult = _radio.setRxBandwidth(234.3f);
+    if (!RadioSettings::validRxBandwidth(rxBandwidth)) rxBandwidth = RadioSettings::DEFAULT_RX_BANDWIDTH;
+    const int16_t bandwidthResult = _radio.setRxBandwidth(rxBandwidth);
     if (bandwidthResult != RADIOLIB_ERR_NONE) {
-        error("[RADIO] Échec configuration bande RX 234.3 kHz : %d", bandwidthResult);
+        error("[RADIO] Échec configuration bande RX %.1f kHz : %d", rxBandwidth, bandwidthResult);
+    } else {
+        info("[RADIO] Bande RX configurée : %.1f kHz.", rxBandwidth);
     }
     _radio.setPreambleLength(4);
 }

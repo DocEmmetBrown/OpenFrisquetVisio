@@ -22,6 +22,11 @@ void Config::load() {
 
   // WIFI
   _developerMode = _preferences.getBool("developerMode", false);
+  _radioRxBandwidth = _preferences.getFloat("radioRxBw", RadioSettings::DEFAULT_RX_BANDWIDTH);
+  if (!RadioSettings::validRxBandwidth(_radioRxBandwidth)) {
+    _radioRxBandwidth = RadioSettings::DEFAULT_RX_BANDWIDTH;
+  }
+  _radioLnaBypass = _preferences.getBool("radioBypass", RadioSettings::DEFAULT_LNA_BYPASS);
   _wifiOpts.hostname      = _preferences.getString("wifiHostname", "esp32-device");
   _wifiOpts.ssid          = _preferences.getString("wifiSsid", "");
 
@@ -90,6 +95,8 @@ void Config::save() {
 
   // WIFI
   _preferences.putBool("developerMode", _developerMode);
+  _preferences.putFloat("radioRxBw", _radioRxBandwidth);
+  _preferences.putBool("radioBypass", _radioLnaBypass);
   _preferences.putString("wifiHostname", _wifiOpts.hostname);
   _preferences.putString("wifiSsid",     _wifiOpts.ssid);
   

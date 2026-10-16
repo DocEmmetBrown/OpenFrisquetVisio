@@ -12,7 +12,7 @@ FrisquetManager::FrisquetManager(FrisquetRadio &radio, Config &cfg, MqttManager 
 void FrisquetManager::begin()
 {
     // Init radio
-    _radio.init();
+    _radio.init(_cfg.radioRxBandwidth(), _cfg.radioLnaBypass());
     _radio.setNetworkID(_cfg.getNetworkID());
 
     initMqtt();

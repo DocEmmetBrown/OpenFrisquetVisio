@@ -440,6 +440,20 @@ void Portal::handleGetConfig() {
 
   String json = "{";
   json += "\"developerMode\":" + String(_frisquetManager.config().developerMode() ? "true" : "false") + ",";
+  if (_frisquetManager.config().developerMode()) {
+    const auto& cfg = _frisquetManager.config();
+    json += "\"radioRxBandwidth\":" + String(cfg.radioRxBandwidth(), 1) + ",";
+    json += "\"radioLnaBypass\":" + String(cfg.radioLnaBypass() ? "true" : "false") + ",";
+    json += "\"radioBypassSupported\":" + String(RadioSettings::supportsLnaBypass() ? "true" : "false") + ",";
+    json += "\"radioRxBandwidths\":[";
+    bool first = true;
+    for (float bandwidth : RadioSettings::RX_BANDWIDTHS) {
+      if (!first) json += ",";
+      first = false;
+      json += String(bandwidth, 1);
+    }
+    json += "],";
+  }
   json += "\"wifiHostname\":\"" + jsonEscape(String(w.hostname)) + "\",";
   json += "\"wifiSsid\":\"" + jsonEscape(String(w.ssid)) + "\",";
   json += "\"wifiPass\":\"" + jsonEscape(String(w.password)) + "\",";
@@ -500,6 +514,41 @@ void Portal::handlePostConfig() {
   if (_srv.method() != HTTP_POST) {
     _srv.send(405, "application/json", "{\"ok\":false,\"err\":\"Méthode non autorisée\"}");
     return;
+  }
+
+  auto& cfg = _frisquetManager.config();
+  // Valider les réglages radio avant toute modification de la configuration.
+  const bool hasBandwidth = _srv.hasArg("radioRxBandwidth");
+  const bool hasBypass = _srv.hasArg("radioLnaBypass");
+  float rxBandwidth = cfg.radioRxBandwidth();
+  bool lnaBypass = cfg.radioLnaBypass();
+  if (hasBandwidth || hasBypass) {
+    if (!requireDeveloperMode()) return;
+    if (hasBandwidth) {
+      String value = _srv.arg("radioRxBandwidth");
+      value.trim();
+      char* end = nullptr;
+      rxBandwidth = strtof(value.c_str(), &end);
+      if (value.length() == 0 || !end || *end != '\0' || !RadioSettings::validRxBandwidth(rxBandwidth)) {
+        _srv.send(400, "application/json; charset=utf-8",
+                  "{\"ok\":false,\"err\":\"Bande RX non prise en charge par le SX1262\"}");
+        return;
+      }
+    }
+    if (hasBypass) {
+      if (!RadioSettings::supportsLnaBypass()) {
+        _srv.send(400, "application/json; charset=utf-8",
+                  "{\"ok\":false,\"err\":\"Bypass LNA disponible uniquement sur Heltec V4.3 avec KCT8103L\"}");
+        return;
+      }
+      const String value = _srv.arg("radioLnaBypass");
+      if (value != "true" && value != "false" && value != "1" && value != "0") {
+        _srv.send(400, "application/json; charset=utf-8",
+                  "{\"ok\":false,\"err\":\"Valeur de bypass LNA invalide\"}");
+        return;
+      }
+      lnaBypass = value == "true" || value == "1";
+    }
   }
 
   auto& w = _frisquetManager.config().getWiFiOptions();
@@ -658,6 +707,8 @@ void Portal::handlePostConfig() {
     cfg.developerMode(parseBoolArg(_srv.arg("developerMode"), cfg.developerMode()));
   }
 
+  if (hasBandwidth) cfg.radioRxBandwidth(rxBandwidth);
+  if (hasBypass) cfg.radioLnaBypass(lnaBypass);
   _frisquetManager.config().save();
   info("[PORTAIL] Configuration enregistrée, redémarrage programmé");
 
