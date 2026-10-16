@@ -118,9 +118,9 @@ void Radio::init() {
     _radio.setFrequency(868.96);
     _radio.setBitRate(25.0);
     _radio.setFrequencyDeviation(50.0);
-    const int16_t bandwidthResult = _radio.setRxBandwidth(187.2f);
+    const int16_t bandwidthResult = _radio.setRxBandwidth(234.3f);
     if (bandwidthResult != RADIOLIB_ERR_NONE) {
-        error("[RADIO] Échec configuration bande RX 187.2 kHz : %d", bandwidthResult);
+        error("[RADIO] Échec configuration bande RX 234.3 kHz : %d", bandwidthResult);
     }
     _radio.setPreambleLength(4);
 }
