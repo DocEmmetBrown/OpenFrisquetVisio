@@ -92,13 +92,7 @@ class Zone {
         
         uint32_t getLastChange() { return _lastChange; }
         uint32_t getLastEnvoi() { return _lastEnvoi; }
-        void refreshLastEnvoi() {
-            _lastEnvoi = millis();
-            if(_programmationEnvoiEnAttente) {
-                _programmationEnvoiEnAttente = false;
-                saveConfig();
-            }
-        }
+        void refreshLastEnvoi() { _lastEnvoi = millis(); _programmationEnvoiEnAttente = false; }
         void refreshLastChange() { _lastChange = millis(); }
         
         SOURCE getSource() { return _source; }

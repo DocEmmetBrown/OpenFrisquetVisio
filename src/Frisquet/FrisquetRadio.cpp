@@ -2,8 +2,8 @@
 #include "../Buffer.h"
 #include "../Logs.h"
 
-bool FrisquetRadio::receivedFlag = false;
-bool FrisquetRadio::interruptReceive = false;
+volatile bool FrisquetRadio::receivedFlag = false;
+volatile bool FrisquetRadio::interruptReceive = false;
 
 void FrisquetRadio::purgeBufferedPackets() {
     const uint32_t now = millis();
@@ -35,6 +35,7 @@ bool FrisquetRadio::bufferUnexpectedPacket(const byte* donnees, size_t length) {
             packet.used = true;
             packet.timestamp = millis();
             packet.length = length;
+            packet.rssi = getLastPacketRSSI();
             memcpy(packet.data, donnees, length);
             if (length >= sizeof(RadioTrameHeader)) {
                 RadioTrameHeader header;
@@ -52,7 +53,7 @@ bool FrisquetRadio::bufferUnexpectedPacket(const byte* donnees, size_t length) {
     return false;
 }
 
-bool FrisquetRadio::popBufferedPacket(byte* donnees, size_t& length) {
+bool FrisquetRadio::popBufferedPacket(byte* donnees, size_t& length, float* rssi) {
     purgeBufferedPackets();
 
     for (BufferedPacket& packet : _rxBuffer) {
@@ -65,6 +66,7 @@ bool FrisquetRadio::popBufferedPacket(byte* donnees, size_t& length) {
         }
 
         memcpy(donnees, packet.data, length);
+        if (rssi) *rssi = packet.rssi;
         if (length >= sizeof(RadioTrameHeader)) {
             RadioTrameHeader header;
             memcpy(&header, donnees, sizeof(header));
@@ -259,16 +261,45 @@ int16_t FrisquetRadio::receiveExpected(
     byte* donnees, 
     size_t& length,
     uint8_t retry,
-    bool useReadData
+    bool useReadData,
+    bool keepReceiving
 ) {
+    if (retry == 0) return RADIOLIB_ERR_RX_TIMEOUT;
     interruptReceive = true;
+    // Cette fonction prend en charge la réception en attente. Son événement
+    // logiciel ne doit pas déclencher une deuxième lecture dans loop().
+    receivedFlag = false;
 
     byte buff[RADIOLIB_SX126X_MAX_PACKET_LENGTH];
     int16_t err;
     RadioTrameHeader radioTrameHeader;
 
     do {
-        if(useReadData) {
+        if (keepReceiving) {
+            // Ne pas interrompre une réponse déjà en cours de réception.
+            // Même fenêtre que receive() à 25 kbit/s : 5 * 255 * 8 / 25000.
+            const uint32_t waitStarted = millis();
+            while (!hasReceivedPacket() && millis() - waitStarted < 408U) {
+                delay(1);
+            }
+            if (!hasReceivedPacket()) {
+                err = RADIOLIB_ERR_RX_TIMEOUT;
+                continue;
+            }
+            receivedFlag = false;
+            err = this->readData(buff, 0);
+            // readData() place la radio en veille. Réarmer avant le traitement,
+            // y compris après un CRC invalide, puis attendre une nouvelle IRQ.
+            const int16_t restartError = startReceive();
+            if (restartError != RADIOLIB_ERR_NONE) {
+                err = restartError;
+                break;
+            }
+        } else if(useReadData) {
+            // Le tampon peut déjà contenir la réponse reçue pendant le traitement
+            // du satellite. Le lire une seule fois : readData() n'attend aucun
+            // nouveau paquet. Les tours suivants doivent attendre une réception.
+            useReadData = false;
             err = this->readData(buff, 0);
         } else {
             err = this->receive(buff, 0);
@@ -281,10 +312,11 @@ int16_t FrisquetRadio::receiveExpected(
         size_t len = this->getPacketLength();
 
         if(len < sizeof(radioTrameHeader)) {
+            err = RADIOLIB_ERR_RX_TIMEOUT;
             continue;
         }
         
-        logRadio(true, (byte*)buff, len);
+        logRadio(true, (byte*)buff, len, getLastPacketRSSI());
 
         memcpy(&radioTrameHeader, buff, sizeof(radioTrameHeader));
         if( radioTrameHeader.idExpediteur == idExpediteur && 
@@ -310,7 +342,7 @@ int16_t FrisquetRadio::receiveExpected(
 
 
     interruptReceive = false;
-    startReceive();
+    if (!keepReceiving) startReceive();
     return err;
 }
 

@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <time.h>
+#include <math.h>
 
 Logs logs;  // définition unique de l’instance globale
 
@@ -182,12 +183,29 @@ static void formatHex(char* out, size_t outSize, const byte* payload, size_t len
   }
 }
 
-void logRadio(bool rx, const byte* payload, size_t length) {
+void logRadio(bool rx, const byte* payload, size_t length, float rssi) {
   char hex[Logs::kMaxMessageLen];
   formatHex(hex, sizeof(hex), payload, length);
   char buffer[Logs::kMaxMessageLen];
-  snprintf(buffer, sizeof(buffer), "[%s][%d] %s", rx ? "RX" : "TX", static_cast<int>(length), hex);
+  if (rx && isfinite(rssi)) {
+    snprintf(buffer, sizeof(buffer), "[RX][%d][RSSI=%.1f dBm] %s", static_cast<int>(length), rssi, hex);
+  } else {
+    snprintf(buffer, sizeof(buffer), "[%s][%d] %s", rx ? "RX" : "TX", static_cast<int>(length), hex);
+  }
   logs.addLog("RADIO", buffer);
+}
+
+void logRadioCrcData(const byte* payload, size_t length) {
+  if (!payload) return;
+  // Découper pour conserver tous les octets sans agrandir le tampon global.
+  // Ces lignes sont diagnostiques : les données restent rejetées pour CRC.
+  constexpr size_t chunkSize = 48;
+  for (size_t offset = 0; offset < length; offset += chunkSize) {
+    const size_t count = length - offset < chunkSize ? length - offset : chunkSize;
+    char hex[chunkSize * 3];
+    formatHex(hex, sizeof(hex), payload + offset, count);
+    logs.addLogf("RADIO", "[RX][CRC_DATA][offset=%u] %s", static_cast<unsigned>(offset), hex);
+  }
 }
 
 void info(const char* fmt, ...) {

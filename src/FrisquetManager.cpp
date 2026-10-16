@@ -100,7 +100,7 @@ void FrisquetManager::loop()
 {
     uint32_t now = millis();
 
-    if (FrisquetRadio::receivedFlag || _radio.hasBufferedPacket()) { // Réception données radio
+    if (FrisquetRadio::receivedFlag || _radio.hasReceivedPacket() || _radio.hasBufferedPacket()) {
         onRadioReceive();
     }
 
@@ -165,30 +165,38 @@ void FrisquetManager::initMqtt()
 void FrisquetManager::onRadioReceive()
 {
     //FrisquetRadio::interruptReceive = true;
-    FrisquetRadio::receivedFlag = false;
-
     byte buff[RADIOLIB_SX126X_MAX_PACKET_LENGTH];
     size_t length = 0;
+    float rssi = NAN;
     int16_t err = RADIOLIB_ERR_NONE;
 
-    if (_radio.popBufferedPacket(buff, length)) {
-        info("[RADIO] Réutilisation paquet bufferisé : %d bytes", length);
-    } else {
+    // Priorité au paquet matériel : traiter le tampon logiciel en premier
+    // pouvait effacer le drapeau d'une autre trame encore présente dans le SX1262.
+    if (_radio.hasReceivedPacket()) {
+        FrisquetRadio::receivedFlag = false;
         err = _radio.readData(buff, 0);
 
         if (err != RADIOLIB_ERR_NONE)
         {
+            _radio.startReceive();
             FrisquetRadio::interruptReceive = false;
             return;
         }
 
         length = _radio.getPacketLength();
+        rssi = _radio.getLastPacketRSSI();
         _radio.startReceive();
+    } else {
+        // Drapeau périmé : ne pas relire le matériel ni interrompre une réception
+        // éventuellement en cours. Le registre IRQ est aussi vérifié par loop().
+        FrisquetRadio::receivedFlag = false;
+        if (!_radio.popBufferedPacket(buff, length, &rssi)) return;
+        info("[RADIO] Réutilisation paquet bufferisé : %d bytes", length);
     }
 
     info("[RADIO] Réception données radio : %d bytes", length);
 
-    logRadio(true, buff, length);
+    logRadio(true, buff, length, rssi);
 
     if (length < sizeof(FrisquetRadio::RadioTrameHeader))
     {
@@ -252,7 +260,7 @@ bool FrisquetManager::recupererNetworkID() {
             NetworkID networkID;
         } donnees;
 
-        logRadio(true, (byte*)buff, buffLength);
+        logRadio(true, (byte*)buff, buffLength, radio().getLastPacketRSSI());
 
         ReadBuffer readBuffer = ReadBuffer(buff, buffLength);
         readBuffer.getBytes((byte*)&donnees, sizeof(donnees));

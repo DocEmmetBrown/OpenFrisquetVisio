@@ -47,7 +47,7 @@ void Satellite::begin(bool modeVirtuel) {
 
 void Satellite::loop() {
     
-    static bool firstLoop = true;
+    bool& firstLoop = _initialReadPending;
     const bool cdcGereeParConnect = getConfig().useConnect();
     if(firstLoop && !_modeVirtuel) {
         firstLoop = false;
@@ -62,18 +62,25 @@ void Satellite::loop() {
     }
 
     if(firstLoop) {
+        firstLoop = false;
         recupererInfosChaudiere();
         if (this->getId() == ID_ZONE_1 && !cdcGereeParConnect) {
             if (recupererTemperatureCDC()) {
-                _lastRecuperationTemperatureCDC = now;
+                _lastRecuperationTemperatureCDC = millis();
+            } else {
+                error("[SATELLITE Z%d] Échec de la récupération initiale de la température CDC.", getNumeroZone());
             }
+            _cdcSchedules[0].due(600, 180);
+            _cdcSchedules[1].due(600, 480);
         }
         publishMqtt();
+        if (this->getId() == ID_ZONE_1 && !cdcGereeParConnect) _chaudiere.publishMqtt();
         _zone.publishMqtt();
-        firstLoop = false;
     }
 
-    if (this->getId() == ID_ZONE_1 && !cdcGereeParConnect && (now - _lastRecuperationTemperatureCDC >= 300000 || _lastRecuperationTemperatureCDC == 0)) { // 5 minutes
+    // Sans Connect : :03 et :08 de chaque tranche, hors créneaux des satellites.
+    if (this->getId() == ID_ZONE_1 && !cdcGereeParConnect
+        && (_cdcSchedules[0].due(600, 180) || _cdcSchedules[1].due(600, 480))) {
         info("[SATELLITE Z%d] Récupération de la température CDC...", getNumeroZone());
         if (recupererTemperatureCDC()) {
             _lastRecuperationTemperatureCDC = now;

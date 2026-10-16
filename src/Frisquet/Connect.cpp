@@ -150,8 +150,8 @@ bool Connect::recupererInformations() {
         temperature16 temperatureInconnue5;
         pression16 pression;
         fword modeFonctionnement;
-        byte modeECS;
-        temperature16 temperatureECSInstant;
+        byte inconnu;
+        temperature16 inconnu2;
     } buff;
 
     size_t length;
@@ -439,12 +439,14 @@ bool Connect::envoyerModeECS() {
 }
 
 bool Connect::handlePassiveReadResponse(uint16_t adresseMemoire, const byte* buff, size_t length) {
-    const uint16_t addrInformations = 0x79F2;
+    const uint16_t addrInformations = 0x79E0;
+    const uint16_t addrInformations2 = 0x79FC;
     const uint16_t addrConsommation = 0x7A18;
     const uint16_t addrDate = 0xA02B;
-    const uint16_t addrModeEcs = 0xA0FC;
+    const uint16_t addrModeEcs = 0xA0F0;
 
     auto addrIsInformations = adresseMemoire == addrInformations || adresseMemoire == (addrInformations + 0x00C8);
+    auto addrIsInformations2 = adresseMemoire == addrInformations2 || adresseMemoire == (addrInformations2 + 0x00C8);
     auto addrIsConsommation = adresseMemoire == addrConsommation || adresseMemoire == (addrConsommation + 0x00C8);
     auto addrIsDate = adresseMemoire == addrDate;
 
@@ -453,6 +455,7 @@ bool Connect::handlePassiveReadResponse(uint16_t adresseMemoire, const byte* buf
         struct {
             FrisquetRadio::RadioTrameHeader header;
             uint8_t longueurDonnees;
+            byte offsetInformations[36]; // (0x79F2 - 0x79E0) * 2 octets
             temperature16 temperatureAmbianteZ1;
             temperature16 temperatureAmbianteZ2;
             temperature16 temperatureAmbianteZ3;
@@ -463,6 +466,54 @@ bool Connect::handlePassiveReadResponse(uint16_t adresseMemoire, const byte* buf
             temperature16 temperatureConsigneZ2;
             temperature16 temperatureConsigneZ3;
             temperature16 temperatureExterieure;
+        } resp;
+        static_assert(sizeof(resp) == 63, "La réponse passive 79E0 doit contenir 63 octets");
+
+        if (!buff || length < sizeof(resp)) {
+            return false;
+        }
+        memcpy(&resp, buff, sizeof(resp));
+        const size_t prefixLength = sizeof(resp.header) + 1;
+        if (resp.longueurDonnees < sizeof(resp) - prefixLength
+            || resp.longueurDonnees > length - prefixLength) return false;
+
+        if (getZone1().getSource() == Zone::SOURCE::CONNECT) {
+            getZone1().setTemperatureAmbiante(resp.temperatureAmbianteZ1.toFloat());
+            getZone1().setTemperatureConsigne(resp.temperatureConsigneZ1.toFloat());
+        }
+        getZone1().setTemperatureConsigneDepart(resp.temperatureConsigneDepartZ1.toFloat());
+
+        if (getZone2().getSource() == Zone::SOURCE::CONNECT) {
+            getZone2().setTemperatureAmbiante(resp.temperatureAmbianteZ2.toFloat());
+            getZone2().setTemperatureConsigne(resp.temperatureConsigneZ2.toFloat());
+        }
+        getZone2().setTemperatureConsigneDepart(resp.temperatureConsigneDepartZ2.toFloat());
+
+        if (getZone3().getSource() == Zone::SOURCE::CONNECT) {
+            getZone3().setTemperatureAmbiante(resp.temperatureAmbianteZ3.toFloat());
+            getZone3().setTemperatureConsigne(resp.temperatureConsigneZ3.toFloat());
+        }
+        getZone3().setTemperatureConsigneDepart(resp.temperatureConsigneDepartZ3.toFloat());
+
+        if(resp.temperatureExterieure.toFloat() != 129) {
+            setTemperatureExterieure(resp.temperatureExterieure.toFloat());
+        }
+        // Les mesures suivantes ne sont pas couvertes par cette lecture.
+
+        _lastRecuperationTemperatures = millis();
+        publishMqtt();
+        _zone1.publishMqtt();
+        _zone2.publishMqtt();
+        _zone3.publishMqtt();
+        return true;
+    }
+
+    if (addrIsInformations2) {
+        debug("[CONNECT] Réception des informations 2 passives du Connect.");
+        struct {
+            FrisquetRadio::RadioTrameHeader header;
+            uint8_t longueurDonnees;
+            // 0x79FC suit les dix mots de températures lus à partir de 0x79F2.
             temperature16 temperatureECS;
             temperature16 temperatureCDC;
             temperature16 temperatureDepartZ1;
@@ -475,46 +526,28 @@ bool Connect::handlePassiveReadResponse(uint16_t adresseMemoire, const byte* buf
             temperature16 temperatureInconnue5;
             pression16 pression;
             fword modeFonctionnement;
-            byte modeECS;
-            temperature16 temperatureECSInstant;
+            byte inconnu;
+            temperature16 inconnu2;
+            byte inconnus[29];
         } resp;
+        static_assert(sizeof(resp) == 63, "La réponse passive 79FC doit contenir 63 octets");
 
-        if (length < sizeof(resp)) {
-            return false;
-        }
+        if (!buff || length < sizeof(resp)) return false;
         memcpy(&resp, buff, sizeof(resp));
+        const size_t prefixLength = sizeof(resp.header) + 1;
+        if (resp.longueurDonnees < sizeof(resp) - prefixLength
+            || resp.longueurDonnees > length - prefixLength) return false;
 
-        if (getZone1().getSource() == Zone::SOURCE::CONNECT) {
-            getZone1().setTemperatureAmbiante(resp.temperatureAmbianteZ1.toFloat());
-            getZone1().setTemperatureConsigne(resp.temperatureConsigneZ1.toFloat());
-        }
-        getZone1().setTemperatureDepart(resp.temperatureDepartZ1.toFloat());
-        getZone1().setTemperatureConsigneDepart(resp.temperatureConsigneDepartZ1.toFloat());
-
-        if (getZone2().getSource() == Zone::SOURCE::CONNECT) {
-            getZone2().setTemperatureAmbiante(resp.temperatureAmbianteZ2.toFloat());
-            getZone2().setTemperatureConsigne(resp.temperatureConsigneZ2.toFloat());
-        }
-        getZone2().setTemperatureDepart(resp.temperatureDepartZ2.toFloat());
-        getZone2().setTemperatureConsigneDepart(resp.temperatureConsigneDepartZ2.toFloat());
-
-        if (getZone3().getSource() == Zone::SOURCE::CONNECT) {
-            getZone3().setTemperatureAmbiante(resp.temperatureAmbianteZ3.toFloat());
-            getZone3().setTemperatureConsigne(resp.temperatureConsigneZ3.toFloat());
-        }
-        getZone3().setTemperatureDepart(resp.temperatureDepartZ3.toFloat());
-        getZone3().setTemperatureConsigneDepart(resp.temperatureConsigneDepartZ3.toFloat());
-
-        if(resp.temperatureExterieure.toFloat() != 129) {
-            setTemperatureExterieure(resp.temperatureExterieure.toFloat());
-        }
         setTemperatureECS(resp.temperatureECS.toFloat());
         setTemperatureCDC(resp.temperatureCDC.toFloat());
-        _chaudiere.setTemperatureFumees(resp.temperatureFumees.toFloat()/2);
+        getZone1().setTemperatureDepart(resp.temperatureDepartZ1.toFloat());
+        getZone2().setTemperatureDepart(resp.temperatureDepartZ2.toFloat());
+        getZone3().setTemperatureDepart(resp.temperatureDepartZ3.toFloat());
+        _chaudiere.setTemperatureFumees(resp.temperatureFumees.toFloat() / 2);
         _chaudiere.setPuissanceInstantaneeECS(resp.puissanceInstantaneeECS.toFloat());
         _chaudiere.setPuissanceInstantaneeChauffage(resp.puissanceInstantaneeChauffage.toFloat());
-        _chaudiere.setModeFonctionnement(resp.modeFonctionnement.toUInt16());
         setPression(resp.pression.toFloat());
+        _chaudiere.setModeFonctionnement(resp.modeFonctionnement.toUInt16());
 
         _lastRecuperationTemperatures = millis();
         publishMqtt();
@@ -571,14 +604,17 @@ bool Connect::handlePassiveReadResponse(uint16_t adresseMemoire, const byte* buf
         struct {
             FrisquetRadio::RadioTrameHeader header;
             uint8_t longueurDonnees;
+            byte offsetModeEcs[24]; // (0xA0FC - 0xA0F0) * 2 octets
             byte i1;
             byte modeECS;
         } resp;
+        static_assert(sizeof(resp) == 33, "La réponse passive A0F0 doit contenir 33 octets");
 
-        if (length < sizeof(resp)) {
-            return false;
-        }
+        if (!buff || length < sizeof(resp)) return false;
         memcpy(&resp, buff, sizeof(resp));
+        const size_t prefixLength = sizeof(resp.header) + 1;
+        if (resp.longueurDonnees < sizeof(resp) - prefixLength
+            || resp.longueurDonnees > length - prefixLength) return false;
 
         setModeECSFromRaw(resp.modeECS);
         _lastRecuperationModeECS = millis();
@@ -620,7 +656,8 @@ bool Connect::onReceive(byte* donnees, size_t length) {
                 buffRx,
                 lengthRx,
                 15,
-                false
+                false,
+                true
             );
             if (err != RADIOLIB_ERR_NONE) {
                 return false;
@@ -727,60 +764,87 @@ void Connect::begin() {
 }
 
 void Connect::loop() {
-    uint32_t now = millis();
+    if (getConfig().useConnectPassive() || !estAssocie()) return;
 
-    if (getConfig().useConnectPassive()) {
+    // Exception au planning : une collecte complète au démarrage, même dans
+    // une fenêtre réservée. Les échecs seront repris aux créneaux ordinaires.
+    if (_initialReadPending) {
+        _initialReadPending = false;
+        info("[CONNECT] Récupération initiale des informations...");
+        if (recupererInformations()) {
+            _lastRecuperationTemperatures = millis();
+        } else {
+            error("[CONNECT] Échec de la récupération initiale des températures.");
+        }
+        delay(100);
+        if (recupererConsommation()) {
+            _lastRecuperationConsommation = millis();
+        } else {
+            error("[CONNECT] Échec de la récupération initiale des consommations.");
+        }
+        delay(100);
+        if (recupererModeECS()) {
+            _lastRecuperationModeECS = millis();
+        } else {
+            error("[CONNECT] Échec de la récupération initiale du mode ECS.");
+        }
+        publishMqtt();
+        _zone1.publishMqtt();
+        _zone2.publishMqtt();
+        _zone3.publishMqtt();
+        // Consommer les créneaux actuellement ouverts pour éviter une lecture
+        // identique immédiatement après la collecte initiale.
+        _temperatureSchedules[0].due(600, 180);
+        _temperatureSchedules[1].due(600, 360);
+        _temperatureSchedules[2].due(600, 480);
+        _consommationSchedule.due(3600, 300);
+        _ecsSchedule.due(3600, 420);
+        return;
+    }
+    if (RadioSchedule::quietWindow(RadioSchedule::clockSeconds())) return;
+
+    // Trois lectures par tranche de 10 minutes : :03, :06 et :08.
+    if (_temperatureSchedules[0].due(600, 180)
+        || _temperatureSchedules[1].due(600, 360)
+        || _temperatureSchedules[2].due(600, 480)) {
+        info("[CONNECT] Récupération des températures...");
+        if (recupererInformations()) {
+            _lastRecuperationTemperatures = millis();
+            publishMqtt();
+            _zone1.publishMqtt();
+            _zone2.publishMqtt();
+            _zone3.publishMqtt();
+        } else {
+            error("[CONNECT] Échec de la récupération des températures.");
+        }
         return;
     }
 
-    if(estAssocie()) {
-        if (now - _lastRecuperationTemperatures >= 150000 || _lastRecuperationTemperatures == 0) { // 2.5 minutes
-            info("[CONNECT] Récupération des températures...");
-            if(recupererInformations()) {
-                _lastRecuperationTemperatures = now;
-                publishMqtt();
-                _zone1.publishMqtt();
-                _zone2.publishMqtt();
-                _zone3.publishMqtt();
-            } else {
-                _lastRecuperationTemperatures = now <= 60000 ? 1 : now - 60000;
-                error("[CONNECT] Échec de la récupération des températures.");
-            }
-            delay(100);
-            /*info("[CONNECT] Récupération de la pression...");
-            if(recupererPression()) {
-                publishMqtt();
-            } else {
-                _lastRecuperationTemperatures = now <= 60000 ? 1 : now - 60000;
-                error("[CONNECT] Échec de la récupération des températures.");
-            }*/
+    // Créneaux horaires distincts pour les lectures moins fréquentes.
+    if (_consommationSchedule.due(3600, 300)) {
+        info("[CONNECT] Récupération des consommations...");
+        if (recupererConsommation()) {
+            _lastRecuperationConsommation = millis();
+            publishMqtt();
+        } else {
+            error("[CONNECT] Échec de la récupération des consommations.");
         }
+        return;
+    }
+    if (_ecsSchedule.due(3600, 420)) {
+        info("[CONNECT] Récupération du mode ECS...");
+        if (recupererModeECS()) {
+            _lastRecuperationModeECS = millis();
+            publishMqtt();
+        } else {
+            error("[CONNECT] Récupération impossible");
+        }
+        return;
+    }
 
-        if (now - _lastRecuperationConsommation >= 3600000 || _lastRecuperationConsommation == 0) { // 1 heure
-            info("[CONNECT] Récupération des consommations...");
-            if(recupererConsommation()) {
-                _lastRecuperationConsommation = now;
-                publishMqtt();
-            } else {
-                _lastRecuperationConsommation = now <= 60000 ? 1 : now - 60000;
-            }
-            delay(100);
-        }
-
-        if (now - _lastRecuperationModeECS >= 3600000 || _lastRecuperationModeECS == 0) { // 1 heure
-            info("[CONNECT] Récupération du mode ECS...");
-            if(recupererModeECS()) {
-                publishMqtt();
-            } else {
-                error("[CONNECT] Récupération impossible");
-            }
-            _lastRecuperationModeECS = now;
-            delay(100);
-        }
-
-        if (now - _lastEnvoiZone >= 30000 || _lastEnvoiZone == 0) { // 30 secondes
-            envoiZones();
-        }
+    const uint32_t now = millis();
+    if (now - _lastEnvoiZone >= 30000 || _lastEnvoiZone == 0) {
+        envoiZones();
     }
 }
 

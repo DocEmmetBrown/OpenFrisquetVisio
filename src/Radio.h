@@ -2,6 +2,7 @@
 
 #include <heltec.h>
 #include <RadioLib.h>
+#include <math.h>
 
 #define SS GPIO_NUM_8
 #define RST_LoRa GPIO_NUM_12
@@ -15,14 +16,26 @@ class Radio {
         void init();
 
         int16_t startReceive() { return _radio.startReceive(); }
-        int16_t receive(uint8_t data[], size_t len) { return _radio.receive(data, len); }
-        int16_t readData(uint8_t data[], size_t len) { return _radio.readData(data, len); }
+        int16_t receive(uint8_t data[], size_t len);
+        int16_t readData(uint8_t data[], size_t len);
+        bool hasReceivedPacket();
+        float getLastPacketRSSI() const { return _lastPacketRSSI; }
         int16_t transmit(byte data[], size_t len) { return _radio.transmit(data, len); }
-        size_t getPacketLength() { return _radio.getPacketLength(); }
+        size_t getPacketLength() const { return _radio.lastRxLength; }
         void onReceive(void (*func)()) { _radio.setPacketReceivedAction(func);}
         void setSyncWord(uint8_t* syncWord, size_t len) { _radio.setSyncWord(syncWord, len); }
 
     private:
-        SX1262 _radio;
+        int16_t finishReceive(int16_t result, const char* operation, const uint8_t* data, size_t requestedLength);
+        // receive() de RadioLib appelle virtuellement readData(), qui efface
+        // ensuite les IRQ. Capturer ici couvre les deux chemins de réception.
+        struct PacketRadio : public SX1262 {
+            using SX1262::SX1262;
+            uint16_t lastRxIrq = 0;
+            size_t lastRxLength = 0;
+            uint8_t lastRxOffset = 0;
+            int16_t readData(uint8_t* data, size_t len) override;
+        };
+        PacketRadio _radio;
+        float _lastPacketRSSI = NAN;
 };
-

@@ -7,7 +7,7 @@ class Logs {
 public:
   static constexpr size_t kMaxLines = 300;
   static constexpr size_t kMaxLevelLen = 8;
-  static constexpr size_t kMaxMessageLen = 192;
+  static constexpr size_t kMaxMessageLen = 224;
   static constexpr size_t kMaxFormattedLen = 256;
 
   explicit Logs(size_t maxLogSize = kMaxLines)
@@ -70,7 +70,8 @@ extern Logs logs;
 
 void debug(const String& message);
 void debug(const char* fmt, ...);
-void logRadio(bool rx, const byte* payload, size_t length);
+void logRadio(bool rx, const byte* payload, size_t length, float rssi = NAN);
+void logRadioCrcData(const byte* payload, size_t length);
 void info(const String& message);
 void info(const char* fmt, ...);
 void error(const String& message);

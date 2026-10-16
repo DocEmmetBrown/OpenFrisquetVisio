@@ -840,25 +840,43 @@ void Portal::handleSendRadio() {
     }
   }
 
-  info("[PORTAIL] Demande d'envoi trame RADIO: %s", hex.c_str());
-
   byte payload[100];
   size_t payloadLength = 0;
-  hexStringToBufferRaw(hex, payload, 100, payloadLength);
-
-  logRadio(false, payload, payloadLength);
-  //_frisquetManager.radio().interruptReceive = true;
-  _frisquetManager.radio().transmit(payload, payloadLength);
-  //_frisquetManager.radio().interruptReceive = false;
-
-  bool ok = true;
-
-  if (ok) {
-    _srv.send(200, "application/json; charset=utf-8", "{\"ok\":true}");
-  } else {
-    _srv.send(500, "application/json; charset=utf-8",
-              "{\"ok\":false,\"err\":\"Échec envoi radio\"}");
+  if (!hexStringToBufferRaw(hex, payload, sizeof(payload), payloadLength) || payloadLength == 0) {
+    _srv.send(400, "application/json; charset=utf-8",
+              "{\"ok\":false,\"err\":\"Trame hexadécimale invalide ou trop longue (100 octets maximum)\"}");
+    return;
   }
+
+  // Ne pas écraser un vrai paquet RX en attente de traitement par loop().
+  if (FrisquetRadio::receivedFlag || FrisquetRadio::interruptReceive) {
+    _srv.send(409, "application/json; charset=utf-8",
+              "{\"ok\":false,\"err\":\"Radio occupée, réessayez après traitement de la réception\"}");
+    return;
+  }
+
+  auto& radio = _frisquetManager.radio();
+  // Le DIO utilisé pour RX signale aussi TxDone : masquer le callback pendant TX.
+  FrisquetRadio::interruptReceive = true;
+  const int16_t txResult = radio.transmit(payload, payloadLength);
+  // transmit() a effacé les IRQ TX. Réactiver le callback AVANT de réarmer RX
+  // pour que la première vraie réponse ne soit pas ignorée.
+  FrisquetRadio::interruptReceive = false;
+  const int16_t rxResult = radio.startReceive();
+
+  // Journaliser après réarmement pour ne pas retarder la reprise de l'écoute.
+  logRadio(false, payload, payloadLength);
+  if (txResult != RADIOLIB_ERR_NONE) {
+    _srv.send(500, "application/json; charset=utf-8",
+              "{\"ok\":false,\"err\":\"Échec envoi radio\",\"code\":" + String(txResult) + "}");
+    return;
+  }
+  if (rxResult != RADIOLIB_ERR_NONE) {
+    _srv.send(500, "application/json; charset=utf-8",
+              "{\"ok\":false,\"err\":\"Trame envoyée, mais échec de reprise de l'écoute radio\",\"code\":" + String(rxResult) + "}");
+    return;
+  }
+  _srv.send(200, "application/json; charset=utf-8", "{\"ok\":true}");
 }
 
 bool Portal::requireDeveloperMode() {
