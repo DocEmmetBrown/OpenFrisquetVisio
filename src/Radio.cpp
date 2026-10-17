@@ -1,6 +1,56 @@
 #include "Radio.h"
 #include "Logs.h"
 
+int16_t Radio::PacketRadio::startReceive() {
+    return startReceiveWithLimit(RADIOLIB_SX126X_RX_TIMEOUT_INF);
+}
+
+int16_t Radio::PacketRadio::startReceiveWithLimit(uint32_t timeout) {
+    // RadioLib 6.6.0 rétablit 255 octets dans startReceiveCommon(). Reprendre
+    // son armement GFSK en appliquant la limite AVANT de lancer la réception.
+    int16_t result = standby();
+    if (result != RADIOLIB_ERR_NONE) return result;
+    if (getPacketType() != RADIOLIB_SX126X_PACKET_TYPE_GFSK) return RADIOLIB_ERR_WRONG_MODEM;
+    uint16_t irqMask = RADIOLIB_SX126X_IRQ_RX_DONE;
+    if (timeout != RADIOLIB_SX126X_RX_TIMEOUT_INF) irqMask |= RADIOLIB_SX126X_IRQ_TIMEOUT;
+    result = setDioIrqParams(RADIOLIB_SX126X_IRQ_RX_DEFAULT, irqMask);
+    if (result != RADIOLIB_ERR_NONE) return result;
+    result = setBufferBaseAddress();
+    if (result != RADIOLIB_ERR_NONE) return result;
+    result = clearIrqStatus();
+    if (result != RADIOLIB_ERR_NONE) return result;
+    result = variablePacketLengthMode(MAX_RX_PACKET_LENGTH);
+    if (result != RADIOLIB_ERR_NONE) return result;
+    getMod()->setRfSwitchState(Module::MODE_RX);
+    return setRx(timeout);
+}
+
+int16_t Radio::PacketRadio::receive(uint8_t* data, size_t len) {
+    // Conserver les délais de RadioLib à 25 kbit/s (408 ms pour len == 0),
+    // indépendamment de la limite matérielle de taille des paquets.
+    const size_t expectedLength = len == 0 ? RADIOLIB_SX126X_MAX_PACKET_LENGTH : len;
+    const uint32_t timeoutMs = static_cast<uint32_t>(expectedLength * 8.0f / 25.0f * 5.0f);
+    const uint32_t radioTimeout = static_cast<uint32_t>(timeoutMs * 1000.0f / 15.625f);
+    int16_t result = startReceiveWithLimit(radioTimeout);
+    if (result != RADIOLIB_ERR_NONE) return result;
+    const uint32_t started = getMod()->hal->millis();
+    bool softTimeout = false;
+    while (!getMod()->hal->digitalRead(getMod()->getIrq())) {
+        getMod()->hal->yield();
+        if (getMod()->hal->millis() - started > timeoutMs) {
+            softTimeout = true;
+            break;
+        }
+    }
+    result = standby();
+    if (result != RADIOLIB_ERR_NONE && result != RADIOLIB_ERR_SPI_CMD_TIMEOUT) return result;
+    if (softTimeout || (getIrqStatus() & RADIOLIB_SX126X_IRQ_TIMEOUT)) {
+        clearIrqStatus();
+        return RADIOLIB_ERR_RX_TIMEOUT;
+    }
+    return readData(data, len);
+}
+
 int16_t Radio::PacketRadio::readData(uint8_t* data, size_t len) {
     // Stabiliser le paquet et ses métadonnées pendant la copie. Le réarmement
     // reste à la charge de l'appelant, comme pour receive() bloquant.
@@ -131,4 +181,5 @@ void Radio::init(float rxBandwidth, bool lnaBypass) {
         info("[RADIO] Bande RX configurée : %.1f kHz.", rxBandwidth);
     }
     _radio.setPreambleLength(4);
+    info("[RADIO] Limite matérielle des paquets RX : %u octets.", MAX_RX_PACKET_LENGTH);
 }

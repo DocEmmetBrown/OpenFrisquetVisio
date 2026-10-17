@@ -13,6 +13,7 @@
 class Radio {
 
     public:
+        static constexpr uint8_t MAX_RX_PACKET_LENGTH = 63;
         Radio();
         void init(float rxBandwidth = RadioSettings::DEFAULT_RX_BANDWIDTH,
                   bool lnaBypass = RadioSettings::DEFAULT_LNA_BYPASS);
@@ -36,7 +37,10 @@ class Radio {
             uint16_t lastRxIrq = 0;
             size_t lastRxLength = 0;
             uint8_t lastRxOffset = 0;
+            int16_t startReceive() override;
+            int16_t receive(uint8_t* data, size_t len) override;
             int16_t readData(uint8_t* data, size_t len) override;
+            int16_t startReceiveWithLimit(uint32_t timeout);
         };
         PacketRadio _radio;
         float _lastPacketRSSI = NAN;
