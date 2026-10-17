@@ -33,6 +33,7 @@ void App::loop() {
   _mqtt.loop();
   _frisquetManager.loop();
   _battery.loop();
+  syncClock();
   delay(10);
 }
 
@@ -54,6 +55,29 @@ void App::initNetwork() {
     });
 
     _networkManager.begin(_cfg.getWiFiOptions());
+
+    // Heure locale France (CET/CEST). Après WiFi.mode() : la pile réseau doit être initialisée.
+    // L'heure reçue de la chaudière (radio) met aussi à jour l'horloge.
+    configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org", "time.google.com");
+}
+
+void App::syncClock() {
+  const uint32_t interval = _clockSynced ? 3600000UL : 5000UL;
+  if (_lastClockSyncMs && millis() - _lastClockSyncMs < interval) return;
+  _lastClockSyncMs = millis();
+
+  time_t t = time(nullptr);
+  if (t < 1700000000) return; // NTP pas encore synchronisé
+
+  struct tm lt;
+  localtime_r(&t, &lt);
+  setTime(lt.tm_hour, lt.tm_min, lt.tm_sec, lt.tm_mday, lt.tm_mon + 1, lt.tm_year + 1900);
+
+  if (!_clockSynced) {
+    _clockSynced = true;
+    info("[HEURE] Synchronisée via NTP : %02d/%02d/%04d %02d:%02d:%02d",
+         lt.tm_mday, lt.tm_mon + 1, lt.tm_year + 1900, lt.tm_hour, lt.tm_min, lt.tm_sec);
+  }
 }
 
 void App::initMqtt() {

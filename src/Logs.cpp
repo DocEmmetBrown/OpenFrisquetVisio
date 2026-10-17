@@ -25,9 +25,10 @@ void Logs::Line::format(char* out, size_t outSize) const {
     return;
   }
   char date[20];
-  const tm* local = localtime(&time);
-  if (local) {
-    strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", local);
+  // TimeLib stocke déjà l'heure locale : pas de conversion de fuseau
+  tm local;
+  if (gmtime_r(&time, &local)) {
+    strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", &local);
   } else {
     Logs::copyTruncate(date, sizeof(date), "1970-01-01 00:00:00");
   }

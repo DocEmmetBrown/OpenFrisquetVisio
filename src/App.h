@@ -42,6 +42,11 @@ private:
   bool _apFallbackArmed = false;
   uint32_t _apFallbackAtMs = 0;
 
+  // Horloge (NTP -> TimeLib)
+  bool _clockSynced = false;
+  uint32_t _lastClockSyncMs = 0;
+  void syncClock();
+
   // Étapes
   void initConfig();
   void initNetwork();
