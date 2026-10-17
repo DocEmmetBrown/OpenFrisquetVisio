@@ -87,6 +87,8 @@ Avant le flash :
 
 - Connecter la carte **Heltec ESP32** via **USB**  
 - Compiler et téléverser avec **PlatformIO** ou **Arduino IDE**
+  - Heltec V3 : environnement `heltec_wifi_lora_32_V3` (téléversement OTA par défaut, voir `platformio.ini`)
+  - Heltec V4 : `pio run -e heltec_wifi_lora_32_V4 -t upload` (USB), puis `heltec_wifi_lora_32_V4-OTA` pour les mises à jour OTA
 - Au premier démarrage, le module crée un **point d’accès WiFi**
 
 ---
