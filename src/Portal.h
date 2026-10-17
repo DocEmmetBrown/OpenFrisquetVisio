@@ -5,6 +5,7 @@
 #include "Config.h"
 #include "Logs.h"
 #include "FrisquetManager.h"
+#include "Battery.h"
 
 // Portail Web de configuration + logs (adapté à ton Config)
 class Portal {
@@ -14,10 +15,12 @@ public:
   // startApFallbackIfNoWifi = monte un AP "ESP32-Setup" si pas de Wi-Fi actif
   void begin(bool startApFallbackIfNoWifi = false);
   void loop();
+  void setBattery(Battery* battery) { _battery = battery; }
 
 private:
   WebServer _srv;
   FrisquetManager& _frisquetManager;
+  Battery* _battery = nullptr;
 
   // AP fallback
   bool _apRunning = false;

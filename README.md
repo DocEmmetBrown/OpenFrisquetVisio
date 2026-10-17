@@ -46,6 +46,11 @@ Deux modes possibles :
   - Commandes de consigne et interrupteurs (Boost, associations, etc.)
 - Entités disponibles immédiatement dans Home Assistant
 
+### 🔋 Batterie (Heltec V4)
+- Avec une batterie LiPo branchée, publication MQTT de la **tension**, du **niveau (%)**, de l'état **en charge** et de la connexion **USB à un ordinateur**
+- La carte n'expose pas l'état du chargeur : « en charge » est **estimé** (tension ≥ 4,15 V, tension en hausse, ou USB relié à un ordinateur). Un chargeur secteur USB n'est pas détecté comme ordinateur.
+- Intervalle de mesure configurable dans le portail (10 minutes par défaut)
+
 ### 🌐 Portail Web intégré
 - Configuration du **WiFi** et du **MQTT**
 - Visualisation des **logs**

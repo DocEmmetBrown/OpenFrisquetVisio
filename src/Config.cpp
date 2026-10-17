@@ -67,6 +67,7 @@ void Config::load() {
   _useZone1 = _preferences.getBool("useZone1", true);
   _useZone2 = _preferences.getBool("useZone2", false);
   _useZone3 = _preferences.getBool("useZone3", false);
+  _batteryIntervalMin = _preferences.getUShort("batInterval", 10);
 
   _preferences.end();
   delay(100);
@@ -129,6 +130,7 @@ void Config::save() {
   _preferences.putBool("useZone1", _useZone1);
   _preferences.putBool("useZone2", _useZone2);
   _preferences.putBool("useZone3", _useZone3);
+  _preferences.putUShort("batInterval", _batteryIntervalMin);
 
   _preferences.end();
 }

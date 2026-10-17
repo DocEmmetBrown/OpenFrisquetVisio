@@ -12,6 +12,7 @@
 
 #include "Frisquet/FrisquetRadio.h"
 #include "FrisquetManager.h"
+#include "Battery.h"
 
 class App {
 public:
@@ -29,6 +30,7 @@ private:
   OTA _ota;
 
   FrisquetManager _frisquetManager;
+  Battery _battery;
 
   // Portail
   Portal* _portal = nullptr;

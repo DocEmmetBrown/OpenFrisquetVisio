@@ -26,6 +26,7 @@ class Config {
         bool _useZone1 = true;
         bool _useZone2 = false;
         bool _useZone3 = false;
+        uint16_t _batteryIntervalMin = 10;
     public:
         Config();
         void load();
@@ -62,4 +63,6 @@ class Config {
         bool useZone2(bool useZone2) { _useZone2 = useZone2; return _useZone2; }
         bool useZone3() { return _useZone3; }
         bool useZone3(bool useZone3) { _useZone3 = useZone3; return _useZone3; }
+        uint16_t batteryIntervalMin() { return _batteryIntervalMin; }
+        void batteryIntervalMin(uint16_t minutes) { _batteryIntervalMin = minutes; }
 };

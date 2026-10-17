@@ -15,6 +15,7 @@ void App::begin() {
   initOta();
 
   _frisquetManager.begin();
+  _battery.begin(_mqtt, _cfg.batteryIntervalMin());
 }
 
 void App::loop() {
@@ -31,6 +32,7 @@ void App::loop() {
   _portal->loop();
   _mqtt.loop();
   _frisquetManager.loop();
+  _battery.loop();
   delay(10);
 }
 
@@ -60,6 +62,7 @@ void App::initMqtt() {
 
 void App::initPortal() {
   _portal = new Portal(_frisquetManager);
+  _portal->setBattery(&_battery);
   _portal->begin(/*startApFallbackIfNoWifi=*/true);
 
   info("[PORTAIL] Portail initialisé.");

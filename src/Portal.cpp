@@ -298,7 +298,9 @@ void Portal::handleGetConfig() {
   json += "\"useSatelliteVirtualZ2\":" +
           String(_frisquetManager.config().useSatelliteVirtualZ2() ? "true" : "false") + ",";
   json += "\"useSatelliteVirtualZ3\":" +
-          String(_frisquetManager.config().useSatelliteVirtualZ3() ? "true" : "false");
+          String(_frisquetManager.config().useSatelliteVirtualZ3() ? "true" : "false") + ",";
+  json += "\"batterySupported\":" + String(Battery::supported ? "true" : "false") + ",";
+  json += "\"batteryInterval\":" + String(_frisquetManager.config().batteryIntervalMin());
 
   json += "}";
   _srv.send(200, "application/json; charset=utf-8", json);
@@ -461,6 +463,15 @@ void Portal::handlePostConfig() {
     _frisquetManager.config().useSatelliteVirtualZ3(v);
   }
 
+  if (_srv.hasArg("batteryInterval")) {
+    long v = _srv.arg("batteryInterval").toInt();
+    if (v < 1 || v > 1440) {
+      _srv.send(400, "application/json; charset=utf-8", "{\"ok\":false,\"err\":\"Intervalle batterie invalide (1 à 1440 minutes)\"}");
+      return;
+    }
+    _frisquetManager.config().batteryIntervalMin((uint16_t)v);
+  }
+
   _frisquetManager.config().save();
   info("[PORTAIL] Configuration enregistrée, redémarrage programmé");
 
@@ -601,6 +612,15 @@ void Portal::handleStatus() {
   json += "\"resetReason\":\"" + jsonEscape(String(resetReason)) + "\",";
   json += "\"freeHeap\":"      + String(freeHeap) + ",";
   json += "\"minFreeHeap\":"   + String(minFreeHeap);
+  if (Battery::supported && _battery && _battery->hasReading()) {
+    json += ",\"battery\":{";
+    json += "\"present\":"  + String(_battery->present() ? "true" : "false") + ",";
+    json += "\"mv\":"       + String(_battery->milliVolts()) + ",";
+    json += "\"percent\":"  + String(_battery->percent()) + ",";
+    json += "\"charging\":" + String(_battery->charging() ? "true" : "false") + ",";
+    json += "\"usbHost\":"  + String(_battery->usbHost() ? "true" : "false");
+    json += "}";
+  }
   json += "}";
   _srv.send(200, "application/json; charset=utf-8", json);
 }
@@ -1376,6 +1396,18 @@ String Portal::html() {
         </div>
 
 
+        <div class='card' id='batteryCard' style='background:#14171f;margin-bottom:12px;display:none'>
+          <h3 style='margin:0 0 8px;font-size:15px'>Batterie</h3>
+          <div class='row'>
+            <label>Intervalle de mesure (minutes)</label>
+            <input id='batteryInterval' type='number' min='1' max='1440' placeholder='10'>
+            <div class='hint'>
+              Tension, niveau et état de charge publiés sur MQTT. L'état « en charge » est estimé
+              (tension proche de 4,2&nbsp;V, en hausse, ou USB relié à un ordinateur).
+            </div>
+          </div>
+        </div>
+
         <div class='card' style='background:#14171f;margin-bottom:12px'>
           <h3 style='margin:0 0 8px;font-size:15px'>Frisquet</h3>
           <hr />
@@ -1501,6 +1533,10 @@ String Portal::html() {
           <span>Reset&nbsp;:</span>
           <span id='badgeReset' class='warn'>inconnu</span>
         </span>
+        <span class='badge' id='badgeBatteryWrap' style='display:none'>
+          <span>Batterie&nbsp;:</span>
+          <span id='badgeBattery' class='warn'>inconnu</span>
+        </span>
       </div>
       <div class='row' style='margin-top:8px'>
         <div class='hint'>
@@ -1558,7 +1594,7 @@ const FIELDS = [
   "wifiHostname","wifiSsid","wifiPass","wifiStatic","wifiIp","wifiGw","wifiMask","wifiDns1","wifiDns2",
   "mqttHost","mqttPort","mqttUser","mqttPass",
   "mqttClientId","mqttBaseTopic",
-  "networkID"
+  "networkID","batteryInterval"
 ];
 
 function updatePairButtons() {
@@ -1613,6 +1649,8 @@ async function loadConfig() {
     savedCfg.useSatelliteVirtualZ1 = !!j.useSatelliteVirtualZ1;
     savedCfg.useSatelliteVirtualZ2 = !!j.useSatelliteVirtualZ2;
     savedCfg.useSatelliteVirtualZ3 = !!j.useSatelliteVirtualZ3;
+    const batteryCard = $("#batteryCard");
+    if (batteryCard) batteryCard.style.display = j.batterySupported ? "" : "none";
     const selConnectMode = $("#useConnectMode");
     if (selConnectMode) {
       if (!j.useConnect) {
@@ -1786,6 +1824,15 @@ async function loadStatus() {
     setBadge("badgeSta", j.staConnected, staText);
     setBadge("badgeUptime", true, formatUptime(j.uptimeSec));
     setBadge("badgeReset", true, j.resetReason || "inconnu");
+    const batWrap = $("#badgeBatteryWrap");
+    if (j.battery && batWrap) {
+      batWrap.style.display = "";
+      const b = j.battery;
+      let t = b.present ? (b.mv / 1000).toFixed(2) + " V (" + b.percent + " %)" : "absente";
+      if (b.charging) t += " – en charge";
+      if (b.usbHost) t += " – USB ordinateur";
+      setBadge("badgeBattery", b.present, t);
+    }
   } catch (e) {
     setBadge("badgeAp", false, "indisponible");
     setBadge("badgeSta", false, "indisponible");
