@@ -1,11 +1,13 @@
 #pragma once
 #include <Arduino.h>
 #include <WiFiClient.h>
+#include <WiFi.h>
 #include <PubSubClient.h>
 #include <vector>
 #include <map>
 #include <functional>
 #include "MqttDevice.h"
+#include "../Logs.h"
 
 class MqttManager {
 public:
@@ -128,6 +130,7 @@ private:
   PubSubClient _mqtt;
   Options _opts;
   const size_t _bufferSize = 2048;
+  uint32_t _lastAttemptMs = 0;
 
   std::map<String, MqttDevice*> _devices;
   std::map<String, CommandCallback> _commandHandlers;
@@ -139,10 +142,15 @@ private:
 
   void reconnect() {
     if (_mqtt.connected()) return;
+    if (_lastAttemptMs && millis() - _lastAttemptMs < 5000) return;
+    _lastAttemptMs = millis();
+    if (!WiFi.isConnected()) return;
+
     if (_mqtt.connect(_opts.clientId.c_str(),
                       _opts.username.length()? _opts.username.c_str(): nullptr,
                       _opts.password.length()? _opts.password.c_str(): nullptr,
                       nullptr, 0, false, nullptr, _opts.cleanSession)) {
+      info("[MQTT] Connecté à %s:%u", _opts.host.c_str(), _opts.port);
 
       // Birth de chaque device + (re)publication des discovery + resubscribe
       for (auto i : _devices) {
@@ -154,6 +162,23 @@ private:
           if (e->commandTopic.full.length()) _mqtt.subscribe(e->commandTopic.full.c_str());
         }
       }
+    } else {
+      info("[MQTT] Échec de connexion à %s:%u (%s)", _opts.host.c_str(), _opts.port, stateToString(_mqtt.state()));
+    }
+  }
+
+  static const char* stateToString(int s) {
+    switch (s) {
+      case MQTT_CONNECTION_TIMEOUT: return "timeout";
+      case MQTT_CONNECTION_LOST: return "connexion perdue";
+      case MQTT_CONNECT_FAILED: return "serveur injoignable";
+      case MQTT_DISCONNECTED: return "déconnecté";
+      case MQTT_CONNECT_BAD_PROTOCOL: return "protocole refusé";
+      case MQTT_CONNECT_BAD_CLIENT_ID: return "client id refusé";
+      case MQTT_CONNECT_UNAVAILABLE: return "serveur indisponible";
+      case MQTT_CONNECT_BAD_CREDENTIALS: return "identifiants invalides";
+      case MQTT_CONNECT_UNAUTHORIZED: return "non autorisé";
+      default: return "inconnu";
     }
   }
 

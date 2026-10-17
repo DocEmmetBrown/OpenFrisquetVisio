@@ -79,7 +79,23 @@ void NetworkManager::startConnect() {
     info("[WiFi] Connexion établie.");
   } else {
     info("[WiFi] Échec de la connexion.");
+    logScanOnce();
   }
+}
+
+// Diagnostic : liste une fois par démarrage les réseaux 2.4 GHz visibles
+void NetworkManager::logScanOnce() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+
+  int n = WiFi.scanNetworks();
+  info("[WIFI] Scan : %d réseau(x) visible(s), recherché : '%s'", n, _opts.ssid.c_str());
+  for (int i = 0; i < n; i++) {
+    info("[WIFI]   '%s' ch%d %ddBm auth=%d%s", WiFi.SSID(i).c_str(), WiFi.channel(i), WiFi.RSSI(i),
+         (int)WiFi.encryptionType(i), WiFi.SSID(i) == _opts.ssid ? "  <== cible" : "");
+  }
+  WiFi.scanDelete();
 }
 
 void NetworkManager::scheduleReconnect() {

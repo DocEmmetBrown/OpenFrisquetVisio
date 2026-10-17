@@ -67,6 +67,7 @@ private:
 
   void attachEvents();
   void startConnect();
+  void logScanOnce();
   void scheduleReconnect();
   uint32_t computeBackoffMs() const;
 
