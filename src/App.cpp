@@ -7,6 +7,11 @@ void App::begin() {
   delay(50);
 
   Heltec.begin(false /*DisplayEnable disable*/, false /*LoRa Disable*/, true /*Serial Enable*/);
+#ifdef WIFI_LORA_32_V4
+  // Écran non utilisé : coupe son alimentation (Vext, active à l'état bas)
+  pinMode(Vext, OUTPUT);
+  digitalWrite(Vext, HIGH);
+#endif
 
   initConfig();
   initNetwork();

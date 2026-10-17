@@ -50,6 +50,7 @@ Deux modes possibles :
 - Avec une batterie LiPo branchée, publication MQTT de la **tension**, du **niveau (%)**, de l'état **en charge** et de la connexion **USB à un ordinateur**
 - La carte n'expose pas l'état du chargeur : « en charge » est **estimé** (tension ≥ 4,15 V, tension en hausse, ou USB relié à un ordinateur). Un chargeur secteur USB n'est pas détecté comme ordinateur.
 - Intervalle de mesure configurable dans le portail (10 minutes par défaut)
+- Pour économiser la batterie, la V4 tourne à 80 MHz, coupe l'alimentation de l'écran (Vext) et active par défaut l'**économie d'énergie Wi-Fi** (option du portail, un peu plus de latence réseau)
 
 ### 🌐 Portail Web intégré
 - Configuration du **WiFi** et du **MQTT**

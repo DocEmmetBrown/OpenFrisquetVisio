@@ -252,6 +252,7 @@ void Portal::handleGetConfig() {
   json += "\"wifiSsid\":\"" + jsonEscape(String(w.ssid)) + "\",";
   json += "\"wifiPass\":\"" + jsonEscape(String(w.password)) + "\",";
   json += "\"wifiStatic\":" + String(w.useStaticIp ? "true" : "false") + ",";
+  json += "\"wifiSleep\":" + String(w.wifiSleep ? "true" : "false") + ",";
   json += "\"wifiIp\":\"" + jsonEscape(w.localIp.toString()) + "\",";
   json += "\"wifiGw\":\"" + jsonEscape(w.gateway.toString()) + "\",";
   json += "\"wifiMask\":\"" + jsonEscape(w.subnet.toString()) + "\",";
@@ -321,6 +322,7 @@ void Portal::handlePostConfig() {
   if (_srv.hasArg("wifiPass"))     w.password = _srv.arg("wifiPass");
 
   // IP statique / DHCP
+  if (_srv.hasArg("wifiSleep")) w.wifiSleep = parseBoolArg(_srv.arg("wifiSleep"), w.wifiSleep);
   if (_srv.hasArg("wifiStatic")) {
     bool cur = w.useStaticIp;
     bool v = parseBoolArg(_srv.arg("wifiStatic"), cur);
@@ -1332,6 +1334,13 @@ String Portal::html() {
             </label>
             <div class='hint'>Cochez pour saisir une adresse IP, gateway, masque et DNS.</div>
           </div>
+          <div style='margin-top:10px'>
+            <label class='check-row'>
+              <input id='wifiSleep' type='checkbox'>
+              <span>Économie d'énergie Wi-Fi (modem sleep)</span>
+            </label>
+            <div class='hint'>Réduit fortement la consommation (utile sur batterie), au prix de quelques centaines de ms de latence réseau.</div>
+          </div>
 
           <div id='wifiStaticBlock' style='display:none;margin-top:6px'>
             <div style='margin-top:8px' class='grid-3'>
@@ -1591,7 +1600,7 @@ let savedCfg = {
 };
 
 const FIELDS = [
-  "wifiHostname","wifiSsid","wifiPass","wifiStatic","wifiIp","wifiGw","wifiMask","wifiDns1","wifiDns2",
+  "wifiHostname","wifiSsid","wifiPass","wifiStatic","wifiSleep","wifiIp","wifiGw","wifiMask","wifiDns1","wifiDns2",
   "mqttHost","mqttPort","mqttUser","mqttPass",
   "mqttClientId","mqttBaseTopic",
   "networkID","batteryInterval"

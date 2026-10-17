@@ -35,7 +35,12 @@ void Config::load() {
   _wifiOpts.firstConnectTimeoutMs = _preferences.getULong("wifiFirstTo", 15000);
   _wifiOpts.reconnectMinMs        = _preferences.getULong("wifiRecMin", 3000);
   _wifiOpts.reconnectMaxMs        = _preferences.getULong("wifiRecMax", 60000);
-  _wifiOpts.wifiSleep     = _preferences.getBool("wifiSleep", false);
+#ifdef WIFI_LORA_32_V4
+  const bool defaultWifiSleep = true;  // carte souvent alimentée sur batterie
+#else
+  const bool defaultWifiSleep = false;
+#endif
+  _wifiOpts.wifiSleep     = _preferences.getBool("wifiSleep", defaultWifiSleep);
 
   // MQTT
   _mqttOpts.clientId      = _preferences.getString("mqttClientId", "OpenFrisquetVisio");
