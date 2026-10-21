@@ -47,6 +47,7 @@ int main() {
             damaged[67] = 0xAD;
             const Result result = decode(damaged, sizeof(damaged), out + 1);
             assert(result.status == Status::Repaired);
+            assert(result.correctedBits == 1);
             assert(result.adjustment == (extra ? -1 : 1));
             assert(memcmp(out + 1, raw + 1, MAX_PAYLOAD) == 0);
         }
@@ -59,6 +60,94 @@ int main() {
     slip(raw, damaged, 450, false);
     assert(damaged[63] == 1);
     assert(decode(damaged, sizeof(damaged), out).status == Status::Repaired);
+
+    // Capture réelle du 21/10 à 19:09:23 : un zéro perdu vers 255, deux vers 334.
+    const uint8_t realMulti[RAW_LENGTH] = {
+        0x31,0x08,0x80,0x0A,0x06,0x81,0x17,0x2A,0x00,0x64,0x00,0x00,
+        0x26,0x10,0x21,0x19,0x09,0x23,0x28,0x03,0x00,0xC8,0x00,0xCD,
+        0x00,0x01,0,0,0,0,0x04,0xF6,0,0,0,0,0,0,0,0,0x09,0xEC,
+        0,0,0,0,0,0,0,0x02,0x96,0x59,0x55,0x55,0x55,0x3B,0xB2,
+        0x7F,0x27,0xEF,0xFF,0xFE,0xE3,0xFF,0x7F,0x2F,0xAA,0x7E
+    };
+    uint8_t expected[52];
+    memcpy(expected, realMulti, sizeof(expected));
+    expected[40] = 0x04; expected[41] = 0xF6; expected[49] = 0;
+    expected[50] = 0x52; expected[51] = 0xCB;
+    assert(valid(expected, 49));
+    memset(out, 0xA5, sizeof(out));
+    Result multi = decode(realMulti, sizeof(realMulti), out + 1);
+    assert(multi.status == Status::Repaired && multi.correctedBits == 3);
+    assert(multi.adjustment == 3);
+    assert(multi.bits[0] == 255 && multi.bits[1] == 334 && multi.bits[2] == 334);
+    assert(memcmp(out + 1, expected + 1, 49) == 0);
+    assert(out[0] == 0xA5 && out[50] == 0xA5);
+
+    // Deux et trois zéros, dans les deux sens, au même endroit ou répartis.
+    uint8_t intermediate[RAW_LENGTH];
+    for (uint8_t count = 2; count <= 3; ++count) {
+        for (bool extra : directions) {
+            memcpy(damaged, raw, sizeof(raw));
+            for (uint8_t i = 0; i < count; ++i) {
+                slip(damaged, intermediate, 450, extra);
+                memcpy(damaged, intermediate, sizeof(damaged));
+            }
+            multi = decode(damaged, sizeof(damaged), out);
+            assert(multi.status == Status::Repaired && multi.correctedBits == count);
+            assert(multi.adjustment == (extra ? -count : count));
+            assert(memcmp(out, raw + 1, MAX_PAYLOAD) == 0);
+        }
+    }
+    // Quatre zéros manquants dépassent la limite autorisée.
+    memcpy(damaged, raw, sizeof(raw));
+    for (uint8_t i = 0; i < 4; ++i) {
+        slip(damaged, intermediate, 450, false);
+        memcpy(damaged, intermediate, sizeof(damaged));
+    }
+    assert(decode(damaged, sizeof(damaged), out).status == Status::Invalid);
+
+    // Deux suites différentes, y compris un glissement dans chaque sens.
+    for (bool extraFirst : directions) {
+        for (bool extraSecond : directions) {
+            slip(raw, intermediate, 450, extraSecond);
+            slip(intermediate, damaged, 200, extraFirst);
+            multi = decode(damaged, sizeof(damaged), out);
+            assert(multi.status == Status::Repaired && multi.correctedBits == 2);
+            assert(memcmp(out, raw + 1, MAX_PAYLOAD) == 0);
+        }
+    }
+
+    // Aucune solution simple, plusieurs solutions dans la passe étendue.
+    const uint8_t extendedAmbiguous[RAW_LENGTH] = {
+        0x3F,0x64,0x3D,0x0A,0xFA,0xF0,0x03,0xAA,0x9E,0x59,0xAB,0x4E,
+        0,0,0,0,0,0,0xBA,0xE4,0x49,0x98,0x5C,0x47,0,0,0,0,0,0,
+        0xB6,0x7F,0x8D,0x2A,0x3E,0xDC,0,0,0,0,0,0,
+        0xBA,0xD6,0x18,0x29,0x65,0xC8,0x7A,0xA7,0xA1,0x60,
+        0,0,0,0,0,0,0,0,0,0,0,0x02,0x91,0x96,0x55,0x78
+    };
+    memset(out, 0xA5, sizeof(out));
+    assert(decode(extendedAmbiguous, RAW_LENGTH, out).status == Status::Ambiguous);
+    for (uint8_t byte : out) assert(byte == 0xA5);
+
+    // Ancien rejet à 14:28 : glissement + autre altération du CRC. Il doit
+    // rester rejeté, même après élargissement de la recherche.
+    const uint8_t badCrc[RAW_LENGTH] = {
+        0x3F,0x7E,0x80,0xAA,0x3A,0x81,0x03,0x38,0x00,0xC8,0x04,0xF6,
+        0x04,0xF6,0x01,0x16,0x00,0xC6,0x00,0xC6,0x00,0xCD,0,0,0,0,
+        0,0x6B,0x02,0x65,0x02,0xC4,0x01,0x45,0x04,0xF6,0x04,0xF6,
+        0x01,0xE3,0,0,0,0,0,0,0,0,0x1E,0,0,0x05,
+        0,0,0,0,0,0,0,0,0,0,0,0x01,0xFD,0x7C,0x55,0x55
+    };
+    assert(decode(badCrc, RAW_LENGTH, out).status == Status::Invalid);
+    for (uint8_t byte : out) assert(byte == 0xA5);
+
+    // Limite de travail atteinte : rejet, même si une solution a été trouvée
+    // sans que toute la recherche d'unicité ait pu être terminée.
+    uint8_t fragmented[RAW_LENGTH] = {};
+    fragmented[0] = 63; fragmented[6] = 3; fragmented[65] = 0x12;
+    for (size_t bit = 56; bit < 512; bit += 17)
+        fragmented[bit / 8] |= 1U << (7 - bit % 8);
+    assert(decode(fragmented, RAW_LENGTH, out).status == Status::SearchLimit);
+    for (uint8_t byte : out) assert(byte == 0xA5);
 
     // Deux reconstructions différentes passent le CRC : rejeter sans copier.
     const uint8_t ambiguous[RAW_LENGTH] = {
@@ -115,5 +204,5 @@ int main() {
     for (size_t length = 0; length < MAX_PAYLOAD + 3; ++length)
         assert(decode(raw, length, out).status != Status::Repaired);
     assert(decode(raw, RAW_LENGTH + 1, out).status == Status::Invalid);
-    puts("OK: CRC, valid frames 6..63, both slips, final 01, ambiguity, rejection and bounds");
+    puts("OK: CRC, frames 6..63, slips 1..3, real capture 52CB, ambiguity, rejection and bounds");
 }
