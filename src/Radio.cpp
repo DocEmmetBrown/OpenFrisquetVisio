@@ -19,7 +19,11 @@ int16_t Radio::PacketRadio::startReceiveWithLimit(uint32_t timeout) {
     if (result != RADIOLIB_ERR_NONE) return result;
     result = clearIrqStatus();
     if (result != RADIOLIB_ERR_NONE) return result;
-    result = variablePacketLengthMode(MAX_RX_PACKET_LENGTH);
+    // Désactiver le traitement matériel pour conserver longueur et CRC reçus.
+    // Le format fixe doit être réappliqué APRÈS setCRC(), qui rétablit 255.
+    result = setCRC(0);
+    if (result != RADIOLIB_ERR_NONE) return result;
+    result = fixedPacketLengthMode(RadioCrc::RAW_LENGTH);
     if (result != RADIOLIB_ERR_NONE) return result;
     getMod()->setRfSwitchState(Module::MODE_RX);
     return setRx(timeout);
@@ -27,8 +31,8 @@ int16_t Radio::PacketRadio::startReceiveWithLimit(uint32_t timeout) {
 
 int16_t Radio::PacketRadio::receive(uint8_t* data, size_t len) {
     // Conserver les délais de RadioLib à 25 kbit/s (408 ms pour len == 0),
-    // indépendamment de la limite matérielle de taille des paquets.
-    const size_t expectedLength = len == 0 ? RADIOLIB_SX126X_MAX_PACKET_LENGTH : len;
+    // La capture brute dure toujours 68 octets, même pour une réponse courte.
+    const size_t expectedLength = len == 0 ? RADIOLIB_SX126X_MAX_PACKET_LENGTH : RadioCrc::RAW_LENGTH;
     const uint32_t timeoutMs = static_cast<uint32_t>(expectedLength * 8.0f / 25.0f * 5.0f);
     const uint32_t radioTimeout = static_cast<uint32_t>(timeoutMs * 1000.0f / 15.625f);
     int16_t result = startReceiveWithLimit(radioTimeout);
@@ -56,6 +60,8 @@ int16_t Radio::PacketRadio::readData(uint8_t* data, size_t len) {
     // reste à la charge de l'appelant, comme pour receive() bloquant.
     lastRxLength = 0;
     lastRxOffset = 0;
+    rawLength = 0;
+    crcResult = RadioCrc::Result();
     int16_t result = standby();
     if (result != RADIOLIB_ERR_NONE) return result;
     lastRxIrq = getIrqStatus();
@@ -69,17 +75,35 @@ int16_t Radio::PacketRadio::readData(uint8_t* data, size_t len) {
     uint8_t status[2] = {0, 0};
     result = getMod()->SPIreadStream(RADIOLIB_SX126X_CMD_GET_RX_BUFFER_STATUS, status, 2);
     if (result != RADIOLIB_ERR_NONE) return result;
-    lastRxLength = status[0];
     lastRxOffset = status[1];
-    const size_t capturedLength = len != 0 && len < lastRxLength ? len : lastRxLength;
-    result = readBuffer(data, static_cast<uint8_t>(capturedLength), lastRxOffset);
+    rawLength = status[0] < sizeof(raw) ? status[0] : sizeof(raw);
+    result = readBuffer(raw, static_cast<uint8_t>(rawLength), lastRxOffset);
     if (result != RADIOLIB_ERR_NONE) return result;
     result = clearIrqStatus();
     if (result != RADIOLIB_ERR_NONE) return result;
-    if (lastRxIrq & (RADIOLIB_SX126X_IRQ_CRC_ERR | RADIOLIB_SX126X_IRQ_HEADER_ERR)) {
-        return RADIOLIB_ERR_CRC_MISMATCH;
+    // Décoder dans un tampon local : ne pas dépasser len lors de la copie.
+    uint8_t payload[MAX_RX_PACKET_LENGTH];
+    if (status[0] == sizeof(raw) && (lastRxIrq & RADIOLIB_SX126X_IRQ_RX_DONE)
+        && !(lastRxIrq & (RADIOLIB_SX126X_IRQ_CRC_ERR | RADIOLIB_SX126X_IRQ_HEADER_ERR))) {
+        crcResult = RadioCrc::decode(raw, rawLength, payload);
     }
-    return RADIOLIB_ERR_NONE;
+    lastRxLength = crcResult.length;
+    const bool accepted = crcResult.status == RadioCrc::Status::Valid
+        || crcResult.status == RadioCrc::Status::Repaired;
+    const size_t capturedLength = len != 0 && len < lastRxLength ? len : lastRxLength;
+    if (capturedLength) memcpy(data, accepted ? payload : raw + 1, capturedLength);
+    return accepted ? RADIOLIB_ERR_NONE : RADIOLIB_ERR_CRC_MISMATCH;
+}
+
+int16_t Radio::transmit(byte data[], size_t len) {
+    // Restaurer le format sur l'air : longueur variable et CRC matériel.
+    int16_t result = _radio.standby();
+    if (result != RADIOLIB_ERR_NONE) return result;
+    result = _radio.setCRC(2, 0x1D0F, 0x1021, true);
+    if (result != RADIOLIB_ERR_NONE) return result;
+    result = _radio.variablePacketLengthMode(MAX_RX_PACKET_LENGTH);
+    if (result != RADIOLIB_ERR_NONE) return result;
+    return _radio.transmit(data, len);
 }
 
 int16_t Radio::receive(uint8_t data[], size_t len) {
@@ -109,10 +133,16 @@ bool Radio::hasReceivedPacket() {
 }
 
 int16_t Radio::finishReceive(int16_t result, const char* operation, const uint8_t* data, size_t requestedLength) {
-    // RadioLib a lu le paquet même lorsque son CRC est invalide. Relever le
-    // RSSI avant le prochain réarmement, mais conserver l'erreur pour le rejeter.
+    // Relever le RSSI avant le prochain réarmement.
     const bool packetRead = result == RADIOLIB_ERR_NONE || result == RADIOLIB_ERR_CRC_MISMATCH;
     _lastPacketRSSI = packetRead ? _radio.getRSSI() : NAN;
+    if (result == RADIOLIB_ERR_NONE && _radio.crcResult.status == RadioCrc::Status::Repaired) {
+        logs.addLogf("RADIO", "[RX][CRC_REPAIRED][len=%u][bit=%u][zero=%+d][RSSI=%.1f dBm]",
+                     static_cast<unsigned>(_radio.lastRxLength),
+                     static_cast<unsigned>(_radio.crcResult.bit),
+                     static_cast<int>(_radio.crcResult.adjustment), _lastPacketRSSI);
+        logRadioCrcData(_radio.raw, _radio.rawLength, "CRC_RAW");
+    }
     if (result == RADIOLIB_ERR_CRC_MISMATCH) {
         const size_t packetLength = _radio.lastRxLength;
         const size_t capturedLength = requestedLength != 0 && requestedLength < packetLength
@@ -126,6 +156,9 @@ int16_t Radio::finishReceive(int16_t result, const char* operation, const uint8_
                      (irq & RADIOLIB_SX126X_IRQ_HEADER_ERR) ? 1U : 0U,
                      static_cast<unsigned>(_radio.lastRxOffset));
         logRadioCrcData(data, capturedLength);
+        logs.addLogf("RADIO", "[RX][CRC_CHECK][mode=software][status=%s][rawlen=%u]",
+                     RadioCrc::statusName(_radio.crcResult.status), static_cast<unsigned>(_radio.rawLength));
+        logRadioCrcData(_radio.raw, _radio.rawLength, "CRC_RAW");
     }
     return result;
 }
@@ -181,5 +214,6 @@ void Radio::init(float rxBandwidth, bool lnaBypass) {
         info("[RADIO] Bande RX configurée : %.1f kHz.", rxBandwidth);
     }
     _radio.setPreambleLength(4);
-    info("[RADIO] Limite matérielle des paquets RX : %u octets.", MAX_RX_PACKET_LENGTH);
+    info("[RADIO] RX brut : %u octets, données : %u max, CRC logiciel et réparation unique.",
+         static_cast<unsigned>(RadioCrc::RAW_LENGTH), MAX_RX_PACKET_LENGTH);
 }

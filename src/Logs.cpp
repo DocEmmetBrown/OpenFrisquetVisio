@@ -195,16 +195,16 @@ void logRadio(bool rx, const byte* payload, size_t length, float rssi) {
   logs.addLog("RADIO", buffer);
 }
 
-void logRadioCrcData(const byte* payload, size_t length) {
+void logRadioCrcData(const byte* payload, size_t length, const char* kind) {
   if (!payload) return;
   // Découper pour conserver tous les octets sans agrandir le tampon global.
-  // Ces lignes sont diagnostiques : les données restent rejetées pour CRC.
+  // Ces lignes conservent aussi la capture brute avant toute réparation.
   constexpr size_t chunkSize = 48;
   for (size_t offset = 0; offset < length; offset += chunkSize) {
     const size_t count = length - offset < chunkSize ? length - offset : chunkSize;
     char hex[chunkSize * 3];
     formatHex(hex, sizeof(hex), payload + offset, count);
-    logs.addLogf("RADIO", "[RX][CRC_DATA][offset=%u] %s", static_cast<unsigned>(offset), hex);
+    logs.addLogf("RADIO", "[RX][%s][offset=%u] %s", kind, static_cast<unsigned>(offset), hex);
   }
 }
 

@@ -71,7 +71,7 @@ extern Logs logs;
 void debug(const String& message);
 void debug(const char* fmt, ...);
 void logRadio(bool rx, const byte* payload, size_t length, float rssi = NAN);
-void logRadioCrcData(const byte* payload, size_t length);
+void logRadioCrcData(const byte* payload, size_t length, const char* kind = "CRC_DATA");
 void info(const String& message);
 void info(const char* fmt, ...);
 void error(const String& message);
