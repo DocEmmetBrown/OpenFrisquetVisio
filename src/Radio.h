@@ -42,7 +42,7 @@ class Radio {
             size_t rawLength = 0;
             RadioCrc::Result crcResult;
             int16_t startReceive() override;
-            int16_t receive(uint8_t* data, size_t len) override;
+            int16_t receive(uint8_t* data, size_t len, RadioLibTime_t timeout = 0) override;
             int16_t readData(uint8_t* data, size_t len) override;
             int16_t startReceiveWithLimit(uint32_t timeout);
         };

@@ -6,34 +6,26 @@ int16_t Radio::PacketRadio::startReceive() {
 }
 
 int16_t Radio::PacketRadio::startReceiveWithLimit(uint32_t timeout) {
-    // RadioLib 6.6.0 rétablit 255 octets dans startReceiveCommon(). Reprendre
-    // son armement GFSK en appliquant la limite AVANT de lancer la réception.
+    // RadioLib 7 conserve la longueur GFSK fixe lors de l'armement RX.
     int16_t result = standby();
     if (result != RADIOLIB_ERR_NONE) return result;
     if (getPacketType() != RADIOLIB_SX126X_PACKET_TYPE_GFSK) return RADIOLIB_ERR_WRONG_MODEM;
-    uint16_t irqMask = RADIOLIB_SX126X_IRQ_RX_DONE;
-    if (timeout != RADIOLIB_SX126X_RX_TIMEOUT_INF) irqMask |= RADIOLIB_SX126X_IRQ_TIMEOUT;
-    result = setDioIrqParams(RADIOLIB_SX126X_IRQ_RX_DEFAULT, irqMask);
-    if (result != RADIOLIB_ERR_NONE) return result;
-    result = setBufferBaseAddress();
-    if (result != RADIOLIB_ERR_NONE) return result;
-    result = clearIrqStatus();
-    if (result != RADIOLIB_ERR_NONE) return result;
     // Désactiver le traitement matériel pour conserver longueur et CRC reçus.
-    // Le format fixe doit être réappliqué APRÈS setCRC(), qui rétablit 255.
+    // Réappliquer explicitement la longueur brute avant chaque réception.
     result = setCRC(0);
     if (result != RADIOLIB_ERR_NONE) return result;
     result = fixedPacketLengthMode(RadioCrc::RAW_LENGTH);
     if (result != RADIOLIB_ERR_NONE) return result;
-    getMod()->setRfSwitchState(Module::MODE_RX);
-    return setRx(timeout);
+    return SX1262::startReceive(timeout, RADIOLIB_IRQ_RX_DEFAULT_FLAGS,
+                               RADIOLIB_IRQ_RX_DEFAULT_MASK, RadioCrc::RAW_LENGTH);
 }
 
-int16_t Radio::PacketRadio::receive(uint8_t* data, size_t len) {
+int16_t Radio::PacketRadio::receive(uint8_t* data, size_t len, RadioLibTime_t timeout) {
     // Conserver les délais de RadioLib à 25 kbit/s (408 ms pour len == 0),
     // La capture brute dure toujours 68 octets, même pour une réponse courte.
     const size_t expectedLength = len == 0 ? RADIOLIB_SX126X_MAX_PACKET_LENGTH : RadioCrc::RAW_LENGTH;
-    const uint32_t timeoutMs = static_cast<uint32_t>(expectedLength * 8.0f / 25.0f * 5.0f);
+    const uint32_t timeoutMs = timeout != 0 ? timeout
+        : static_cast<uint32_t>(expectedLength * 8.0f / 25.0f * 5.0f);
     const uint32_t radioTimeout = static_cast<uint32_t>(timeoutMs * 1000.0f / 15.625f);
     int16_t result = startReceiveWithLimit(radioTimeout);
     if (result != RADIOLIB_ERR_NONE) return result;
@@ -48,7 +40,7 @@ int16_t Radio::PacketRadio::receive(uint8_t* data, size_t len) {
     }
     result = standby();
     if (result != RADIOLIB_ERR_NONE && result != RADIOLIB_ERR_SPI_CMD_TIMEOUT) return result;
-    if (softTimeout || (getIrqStatus() & RADIOLIB_SX126X_IRQ_TIMEOUT)) {
+    if (softTimeout || (getIrqFlags() & RADIOLIB_SX126X_IRQ_TIMEOUT)) {
         clearIrqStatus();
         return RADIOLIB_ERR_RX_TIMEOUT;
     }
@@ -64,14 +56,14 @@ int16_t Radio::PacketRadio::readData(uint8_t* data, size_t len) {
     crcResult = RadioCrc::Result();
     int16_t result = standby();
     if (result != RADIOLIB_ERR_NONE) return result;
-    lastRxIrq = getIrqStatus();
+    lastRxIrq = getIrqFlags();
     if (!(lastRxIrq & (RADIOLIB_SX126X_IRQ_RX_DONE | RADIOLIB_SX126X_IRQ_CRC_ERR
                        | RADIOLIB_SX126X_IRQ_HEADER_ERR))) {
         return RADIOLIB_ERR_RX_TIMEOUT;
     }
 
-    // RadioLib 6.6.0 lit depuis zéro. En RX continu, le SX1262 peut ranger
-    // plusieurs paquets successifs à des offsets différents dans son tampon.
+    // En RX continu, les paquets successifs peuvent avoir des offsets différents.
+    // Lire la capture brute depuis l'offset réellement signalé par le SX1262.
     uint8_t status[2] = {0, 0};
     result = getMod()->SPIreadStream(RADIOLIB_SX126X_CMD_GET_RX_BUFFER_STATUS, status, 2);
     if (result != RADIOLIB_ERR_NONE) return result;
@@ -127,7 +119,7 @@ int16_t Radio::readData(uint8_t data[], size_t len) {
 }
 
 bool Radio::hasReceivedPacket() {
-    const uint16_t irq = _radio.getIrqStatus();
+    const uint16_t irq = _radio.getIrqFlags();
     return (irq & (RADIOLIB_SX126X_IRQ_RX_DONE | RADIOLIB_SX126X_IRQ_CRC_ERR
                    | RADIOLIB_SX126X_IRQ_HEADER_ERR)) != 0;
 }
@@ -213,7 +205,7 @@ void Radio::init(float rxBandwidth, bool lnaBypass) {
     } else {
         info("[RADIO] Bande RX configurée : %.1f kHz.", rxBandwidth);
     }
-    _radio.setPreambleLength(4);
+    _radio.setPreambleLength(16);
     info("[RADIO] RX brut : %u octets, données : %u max, CRC logiciel et réparation unique.",
          static_cast<unsigned>(RadioCrc::RAW_LENGTH), MAX_RX_PACKET_LENGTH);
 }
