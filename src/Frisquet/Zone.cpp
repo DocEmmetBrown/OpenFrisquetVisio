@@ -9,8 +9,8 @@ String nomPreset(Zone::MODE_ZONE mode, byte options) {
         if(options & 0x02) return (options & 0x01) ? "Dérogation Confort" : "Dérogation Réduit";
         return "Auto";
     }
-    if(mode == Zone::MODE_ZONE::CONFORT) return (options & 0x40) ? "Boost" : "Confort permanent";
-    if(mode == Zone::MODE_ZONE::REDUIT) return "Réduit permanent";
+    if(mode == Zone::MODE_ZONE::CONFORT) return (options & 0x40) ? "Boost" : "Confort";
+    if(mode == Zone::MODE_ZONE::REDUIT) return "Réduit";
     if(mode == Zone::MODE_ZONE::HORS_GEL) return "Hors Gel";
     return "None";
 }
@@ -86,7 +86,7 @@ void Zone::begin() {
     _mqttEntities.mode.commandTopic = MqttTopic(MqttManager::compose({device->baseTopic,"z" + String(getNumeroZone()),"mode","set"}), 0, true);
     _mqttEntities.mode.set("icon", "mdi:tune-variant");
     _mqttEntities.mode.set("entity_category", "config");
-    _mqttEntities.mode.setRaw("options", R"(["Auto","Dérogation Confort","Dérogation Réduit","Confort permanent","Réduit permanent","Hors Gel","Boost"])");
+    _mqttEntities.mode.setRaw("options", R"(["Auto","Dérogation Confort","Dérogation Réduit","Confort","Réduit","Hors Gel","Boost"])");
     mqtt().registerEntity(*device, _mqttEntities.mode, true);
     mqtt().onCommand(_mqttEntities.mode, [&](const String& payload){
         appliquerPreset(payload);
@@ -310,14 +310,14 @@ void Zone::begin() {
     _mqttEntities.thermostat.set("current_temperature_topic", MqttManager::compose({device->baseTopic, "z" + String(getNumeroZone()),"temperatureAmbiante"}));
     _mqttEntities.thermostat.set("temperature_command_topic", MqttManager::compose({device->baseTopic, "z" + String(getNumeroZone()),"temperatureConsigne", "set"}));
     _mqttEntities.thermostat.set("temperature_state_topic", MqttManager::compose({device->baseTopic, "z" + String(getNumeroZone()),"temperatureConsigne"}));
-    _mqttEntities.thermostat.setRaw("preset_modes", R"(["Auto","Dérogation Confort","Dérogation Réduit","Confort permanent","Réduit permanent","Hors Gel","Boost"])");
+    _mqttEntities.thermostat.setRaw("preset_modes", R"(["Auto","Dérogation Confort","Dérogation Réduit","Confort","Réduit","Hors Gel","Boost"])");
     _mqttEntities.thermostat.set("optimistic", false);
     mqtt().registerEntity(*device, _mqttEntities.thermostat, false);
     const MqttTopic hvacCommand(MqttManager::compose({device->baseTopic, "z" + String(getNumeroZone()), "thermostat", "set"}));
     mqtt().onCommand(hvacCommand, [this](const String& payload) {
         if(payload == "auto") appliquerPreset("Auto");
-        else if(payload == "heat" && getMode() == MODE_ZONE::AUTO) appliquerPreset("Confort permanent");
-        else if(payload == "heat" && getMode() == MODE_ZONE::INCONNU) appliquerPreset("Confort permanent");
+        else if(payload == "heat" && getMode() == MODE_ZONE::AUTO) appliquerPreset("Confort");
+        else if(payload == "heat" && getMode() == MODE_ZONE::INCONNU) appliquerPreset("Confort");
     });
     _mqttEntities.regime.id = "regimeActifZ" + String(getNumeroZone());
     _mqttEntities.regime.name = "Régime actif Z" + String(getNumeroZone());
@@ -604,8 +604,8 @@ bool Zone::appliquerPreset(const String& preset) {
     // temporaire en conservant le régime permanent, ou reprendre Auto.
     if(preset == "none") {
         if(getMode() == MODE_ZONE::AUTO) return appliquerPreset("Auto");
-        if(getMode() == MODE_ZONE::CONFORT) return appliquerPreset("Confort permanent");
-        if(getMode() == MODE_ZONE::REDUIT) return appliquerPreset("Réduit permanent");
+        if(getMode() == MODE_ZONE::CONFORT) return appliquerPreset("Confort");
+        if(getMode() == MODE_ZONE::REDUIT) return appliquerPreset("Réduit");
         if(getMode() == MODE_ZONE::HORS_GEL) return appliquerPreset("Hors Gel");
         return false;
     }
@@ -700,7 +700,7 @@ void Zone::actualiserDecouverte() {
     // En lecture seule, conserver tous les états observables.
     if(!pilotageDisponible() || (capacites & 2)) presets += "\"Auto\",";
     if(!pilotageDisponible() || (capacites & 4)) presets += "\"Dérogation Confort\",\"Dérogation Réduit\",";
-    presets += "\"Confort permanent\",\"Réduit permanent\",\"Hors Gel\",\"Boost\"]";
+    presets += "\"Confort\",\"Réduit\",\"Hors Gel\",\"Boost\"]";
     _mqttEntities.mode.setRaw("options", presets);
 
     auto* device = mqtt().getDevice("openFrisquetVisio");

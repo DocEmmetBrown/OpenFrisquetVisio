@@ -149,9 +149,9 @@ int main(){
     const unsigned discoveries=mqtt.discoveries;z.actualiserDecouverte();assert(mqtt.discoveries==discoveries);
     assert(!z.appliquerPreset("Auto"));assert(!z.appliquerPreset("Dérogation Confort"));
     assert(z.appliquerPreset("Confort permanent"));assert(z.getMode()==Zone::CONFORT);
-    assert(z.getNomMode()=="Confort permanent");assert(z.getTemperatureConsigne()==20);
+    assert(z.getNomMode()=="Confort");assert(z.getTemperatureConsigne()==20);
     assert(z._mqttEntities.thermostat.value=="heat");
-    assert(z.appliquerPreset("Réduit"));assert(z.getNomMode()=="Réduit permanent");
+    assert(z.appliquerPreset("Réduit"));assert(z.getNomMode()=="Réduit");
     assert(z.getTemperatureConsigne()==17);assert(z._mqttEntities.regime.value=="Réduit");
     assert(z.appliquerPreset("Hors Gel"));assert(z.getTemperatureConsigne()==8);
     assert(z.appliquerPreset("Boost"));assert(z.getNomMode()=="Boost");
