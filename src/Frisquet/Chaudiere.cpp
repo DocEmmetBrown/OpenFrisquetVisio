@@ -14,17 +14,25 @@ void Chaudiere::begin(std::function<void(const String&)> modeEcsCommandCb) {
     _mqttEntities.etatChaudiere.set("icon", "mdi:tune-variant");
     _mqtt.registerEntity(*device, _mqttEntities.etatChaudiere, true);
 
+    _mqttEntities.anomalieChaudiere.id = "anomalieChaudiere";
+    _mqttEntities.anomalieChaudiere.name = "Anomalie chaudière";
+    _mqttEntities.anomalieChaudiere.component = "binary_sensor";
+    _mqttEntities.anomalieChaudiere.stateTopic = MqttTopic(MqttManager::compose({device->baseTopic, "chaudiere", "anomalieChaudiere"}), 0, true);
+    _mqttEntities.anomalieChaudiere.set("device_class", "problem");
+    _mqtt.registerEntity(*device, _mqttEntities.anomalieChaudiere, true);
+
     _mqttEntities.modeFonctionnement.id = "modeFonctionnement";
     _mqttEntities.modeFonctionnement.name = "Mode de fonctionnement";
     _mqttEntities.modeFonctionnement.component = "sensor";
     _mqttEntities.modeFonctionnement.stateTopic = MqttTopic(MqttManager::compose({device->baseTopic, "chaudiere", "modeFonctionnement"}), 0, true);
     _mqttEntities.modeFonctionnement.set("icon", "mdi:hvac");
-    _mqtt.registerEntity(*device, _mqttEntities.modeFonctionnement, true);
+    _mqtt.removeEntityDiscovery(*device, _mqttEntities.modeFonctionnement);
 
     _mqttEntities.tempECS.id = "temperatureECS";
     _mqttEntities.tempECS.name = "Température ECS";
     _mqttEntities.tempECS.component = "sensor";
     _mqttEntities.tempECS.stateTopic = MqttTopic(MqttManager::compose({device->baseTopic, "chaudiere", "temperatureECS"}), 0, true);
+    _mqttEntities.tempECS.availabilityTopic = MqttTopic(MqttManager::compose({device->baseTopic, "chaudiere", "temperatureECS", "availability"}), 0, true);
     _mqttEntities.tempECS.commandTopic = MqttTopic(MqttManager::compose({device->baseTopic, "chaudiere", "temperatureECS", "set"}), 0, true);
     _mqttEntities.tempECS.set("device_class", "temperature");
     _mqttEntities.tempECS.set("state_class", "measurement");
@@ -123,12 +131,17 @@ void Chaudiere::begin(std::function<void(const String&)> modeEcsCommandCb) {
 }
 
 void Chaudiere::publishMqtt() {
-    _mqtt.publishState(_mqttEntities.etatChaudiere, getEtatChaudiere().getLibelle().c_str());
-    _mqtt.publishState(_mqttEntities.modeFonctionnement, getNomModeFonctionnement());
+    _mqtt.publishState(_mqttEntities.etatChaudiere, getNomEtatChaudiere());
+    _mqtt.publishState(_mqttEntities.anomalieChaudiere, !etatChaudiereConnu() ? "None" : getEtatChaudiere().anomalieDetecte() ? "ON" : "OFF");
 
-    if (!isnan(getTemperatureECS())) {
+    const bool temperatureEcsDisponible = isfinite(getTemperatureECS());
+    if (temperatureEcsDisponible) {
         _mqtt.publishState(_mqttEntities.tempECS, getTemperatureECS());
+    } else {
+        // Remplacer aussi l'ancienne valeur retenue ("None" = état inconnu dans HA).
+        _mqtt.publishState(_mqttEntities.tempECS, "None");
     }
+    _mqtt.publishAvailability(_mqttEntities.tempECS, temperatureEcsDisponible);
     if (!isnan(getTemperatureCDC())) {
         _mqtt.publishState(_mqttEntities.tempCDC, getTemperatureCDC());
     }
@@ -178,13 +191,13 @@ void Chaudiere::setTemperatureExterieure(float temperature) {
 void Chaudiere::setModeFonctionnement(uint16_t modeFonctionnement) {
     _modeFonctionnementRaw = modeFonctionnement;
 
-    switch (modeFonctionnement) {
-        case 0x0005:
-        case 0x0105:
+    // Le bit 1 distingue le chauffage ECS du chauffage radiateurs.
+    // Le bit 0 doit rester positionné pour que la valeur soit reconnue.
+    switch (modeFonctionnement & 0x0003) {
+        case 0x0001:
             _modeFonctionnement = MODE_FONCTIONNEMENT::CHAUFFAGE_RADIATEURS;
             break;
-        case 0x0007:
-        case 0x0107:
+        case 0x0003:
             _modeFonctionnement = MODE_FONCTIONNEMENT::CHAUFFAGE_ECS;
             break;
         default:
@@ -204,8 +217,22 @@ String Chaudiere::getNomModeFonctionnement() const {
     }
 }
 
+String Chaudiere::getNomEtatChaudiere() const {
+    // Utiliser uniquement les indicateurs de fonctionnement et le mode radio.
+    if(etatChaudiereConnu() && !_etatChaudiere.fonctionnement) return "Veille";
+    switch(getModeFonctionnement()) {
+        case MODE_FONCTIONNEMENT::CHAUFFAGE_ECS:
+            return "Chauffage ECS";
+        case MODE_FONCTIONNEMENT::CHAUFFAGE_RADIATEURS:
+            return etatChaudiereConnu() && _etatChaudiere.arretChauffage ? "Veille" : "Chauffage";
+        default:
+            return "Inconnu";
+    }
+}
+
 void Chaudiere::setTemperatureECS(float temperature) {
-    _temperatureECS = temperature;
+    // 0x04F6 en dixièmes = 127 °C : sentinelle indiquant une ECS non gérée.
+    _temperatureECS = temperature == 127.0f ? NAN : temperature;
 }
 
 void Chaudiere::setTemperatureCDC(float temperature) {

@@ -64,6 +64,19 @@ public:
     if (e.commandTopic.full.length()) _mqtt.subscribe(e.commandTopic.full.c_str());
   }
 
+  // Conserver la suppression pour le premier raccordement et les reconnexions :
+  // begin() est généralement appelé avant la connexion au broker.
+  void removeEntityDiscovery(MqttDevice& d, MqttEntity& e) {
+    if (!isRegistered(&d)) registerDevice(d);
+    e.device = &d;
+    d.entities.erase(e.id);
+    const String topic = e.discoveryTopic();
+    bool known = false;
+    for (const auto& removed : _removedDiscoveryTopics) if (removed == topic) known = true;
+    if (!known) _removedDiscoveryTopics.push_back(topic);
+    publishRaw(topic, "", 0, true);
+  }
+
   // Command router
   using CommandCallback = std::function<void(const String&)>;
   bool onCommand(const MqttEntity& e, CommandCallback cb) {
@@ -80,6 +93,11 @@ public:
   // Publish helpers
   bool publishAvailability(const MqttDevice& d, bool online) {
     return publishRaw(d.availabilityTopic.full, online ? d.payloadAvailable : d.payloadNotAvailable, 1, true);
+  }
+
+  bool publishAvailability(const MqttEntity& e, bool online) {
+    return publishRaw(e.availabilityTopic.full, online ? e.payloadAvailable : e.payloadNotAvailable,
+                      e.availabilityTopic.qos, e.availabilityTopic.retain);
   }
 
   bool publishState(const MqttEntity& e, const String& payload) {
@@ -127,9 +145,10 @@ private:
   Client& _client;
   PubSubClient _mqtt;
   Options _opts;
-  const size_t _bufferSize = 2048;
+  const size_t _bufferSize = 4096;
 
   std::map<String, MqttDevice*> _devices;
+  std::vector<String> _removedDiscoveryTopics;
   std::map<String, CommandCallback> _commandHandlers;
 
   bool isRegistered(MqttDevice* d) const {
@@ -154,6 +173,10 @@ private:
           if (e->commandTopic.full.length()) _mqtt.subscribe(e->commandTopic.full.c_str());
         }
       }
+      for (const auto& topic : _removedDiscoveryTopics) publishRaw(topic, "", 0, true);
+      // Les commandes climate (mode, consigne, preset) peuvent utiliser des
+      // topics distincts du commandTopic principal de l'entité.
+      for (const auto& handler : _commandHandlers) _mqtt.subscribe(handler.first.c_str());
     }
   }
 
@@ -165,9 +188,9 @@ private:
   bool publishEntityDiscovery(const MqttEntity& e) {
     JsonDocument doc;
     e.buildDiscoveryJson(doc);
-    char json[1024];
-    size_t n = serializeJson(doc, json, sizeof(json));
-    if (!n) return false;
+    String json;
+    size_t n = serializeJson(doc, json);
+    if (!n || n + e.discoveryTopic().length() + 8 > _bufferSize) return false;
     return publishRaw(e.discoveryTopic(), json, 0, true);
   }
 };

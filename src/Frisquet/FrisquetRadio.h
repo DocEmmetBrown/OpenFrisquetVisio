@@ -99,22 +99,24 @@ class FrisquetRadio : public Radio {
             byte* donnees, 
             size_t& length,
             uint8_t retry = 5,
-            bool useReadData = false
+            bool useReadData = false,
+            bool keepReceiving = false // L'écoute continue est déjà armée par le manager.
         );
 
     void setNetworkID(NetworkID networkID);
 
-    bool popBufferedPacket(byte* donnees, size_t& length);
+    bool popBufferedPacket(byte* donnees, size_t& length, float* rssi = nullptr);
     bool hasBufferedPacket();
 
-    static bool receivedFlag;
-    static bool interruptReceive;
+    static volatile bool receivedFlag;
+    static volatile bool interruptReceive;
 
     private:
     struct BufferedPacket {
         bool used = false;
         uint32_t timestamp = 0;
         size_t length = 0;
+        float rssi = NAN;
         byte data[RADIOLIB_SX126X_MAX_PACKET_LENGTH] = {0};
     };
 

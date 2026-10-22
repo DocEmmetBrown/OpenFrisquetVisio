@@ -5,8 +5,10 @@
 #include <stdarg.h>
 #include <cstring>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include "Frisquet/NetworkID.h" 
 #include "Version.h"
+#include "generated/WebAssets.h"
 
 // Déclaration du logger global défini dans Logs.cpp
 extern Logs logs;
@@ -135,6 +137,14 @@ static String jsonEscape(const String& s) {
     return out;
 }
 
+static String jsonFloat(float value, unsigned int decimals = 1) {
+  return isfinite(value) ? String(value, decimals) : String("null");
+}
+
+static String jsonIntOrNull(int32_t value) {
+  return value >= 0 ? String(value) : String("null");
+}
+
 // Helper pour parser un bool depuis une string
 static bool parseBoolArg(const String& s, bool defaultVal) {
   String v = s;
@@ -148,35 +158,185 @@ static bool parseBoolArg(const String& s, bool defaultVal) {
 Portal::Portal(FrisquetManager& frisquetManager, uint16_t port)
 : _srv(port), _frisquetManager(frisquetManager) {}
 
+String Portal::sessionCookie() {
+  const String cookies = _srv.header("Cookie");
+  int start = 0;
+  while (start < static_cast<int>(cookies.length())) {
+    int end = cookies.indexOf(';', start);
+    if (end < 0) end = cookies.length();
+    String cookie = cookies.substring(start, end);
+    cookie.trim();
+    if (cookie.startsWith("ofv_session=")) return cookie.substring(12);
+    start = end + 1;
+  }
+  return String();
+}
+
+bool Portal::isAuthenticated() {
+  const String token = sessionCookie();
+  if (token.length() != 64) return false;
+  const uint64_t now = static_cast<uint64_t>(esp_timer_get_time()) / 1000;
+  for (Session& session : _sessions) {
+    if (now - session.started >= SESSION_DURATION_MS) session.token[0] = '\0';
+    if (session.token[0] && token == session.token) return true;
+  }
+  return false;
+}
+
+bool Portal::requireAuthentication() {
+  _srv.sendHeader("Cache-Control", "no-store");
+  if (isAuthenticated()) return true;
+  if (_srv.uri().startsWith("/api/")) {
+    _srv.send(401, "application/json; charset=utf-8",
+              "{\"ok\":false,\"err\":\"Authentification requise\"}");
+  } else {
+    _srv.sendHeader("Location", "/login");
+    _srv.send(303, "text/plain; charset=utf-8", "Connexion requise");
+  }
+  return false;
+}
+
+void Portal::createSession() {
+  const uint64_t now = static_cast<uint64_t>(esp_timer_get_time()) / 1000;
+  Session* selected = &_sessions[0];
+  for (Session& session : _sessions) {
+    if (!session.token[0] || now - session.started >= SESSION_DURATION_MS) {
+      selected = &session;
+      break;
+    }
+    if (now - session.started > now - selected->started) selected = &session;
+  }
+  uint8_t random[32];
+  esp_fill_random(random, sizeof(random));
+  for (size_t i = 0; i < sizeof(random); ++i) {
+    snprintf(selected->token + i * 2, 3, "%02x", random[i]);
+  }
+  selected->started = now;
+  _srv.sendHeader("Set-Cookie", String("ofv_session=") + selected->token
+                 + "; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200");
+}
+
+void Portal::clearSessions() {
+  for (Session& session : _sessions) session.token[0] = '\0';
+  _srv.sendHeader("Set-Cookie",
+                 "ofv_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+}
+
+void Portal::sendLoginPage(int status, const char* message) {
+  String page = FPSTR(WebAssets::LOGIN_HTML);
+  page.replace("{{LOGIN_ERROR}}", message);
+  _srv.sendHeader("Cache-Control", "no-store");
+  _srv.send(status, "text/html; charset=utf-8", page);
+}
+
+void Portal::handleLoginPage() {
+  if (isAuthenticated()) {
+    _srv.sendHeader("Cache-Control", "no-store");
+    _srv.sendHeader("Location", "/");
+    _srv.send(303);
+    return;
+  }
+  sendLoginPage(200, "");
+}
+
+void Portal::handleLogin() {
+  const uint32_t now = millis();
+  if (_loginBlocked && now - _loginBlockedAt < 30000UL) {
+    _srv.sendHeader("Retry-After", "30");
+    sendLoginPage(429, "Trop de tentatives. Réessayez dans 30 secondes.");
+    return;
+  }
+  if (_loginBlocked) { _loginBlocked = false; _failedLogins = 0; }
+  const String password = _srv.arg("password");
+  if (password.isEmpty() || password.length() > 64
+      || password != _frisquetManager.config().portalPassword()) {
+    if (++_failedLogins >= 5) {
+      _loginBlocked = true;
+      _loginBlockedAt = now;
+      _srv.sendHeader("Retry-After", "30");
+      sendLoginPage(429, "Trop de tentatives. Réessayez dans 30 secondes.");
+    } else {
+      sendLoginPage(401, "Mot de passe incorrect.");
+    }
+    return;
+  }
+  _failedLogins = 0;
+  createSession();
+  _srv.sendHeader("Cache-Control", "no-store");
+  _srv.sendHeader("Location", "/");
+  _srv.send(303);
+}
+
+void Portal::handleLogout() {
+  const String token = sessionCookie();
+  for (Session& session : _sessions) {
+    if (token == session.token) session.token[0] = '\0';
+  }
+  _srv.sendHeader("Cache-Control", "no-store");
+  _srv.sendHeader("Set-Cookie",
+                 "ofv_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+  _srv.sendHeader("Location", "/login");
+  _srv.send(303);
+}
+
+void Portal::onAuthenticated(const char* uri, HTTPMethod method, void (Portal::*handler)(),
+                             void (Portal::*uploadHandler)()) {
+  auto authenticatedHandler = [this, handler]() {
+    if (requireAuthentication()) (this->*handler)();
+  };
+  if (uploadHandler) {
+    _srv.on(uri, method, authenticatedHandler, [this, uploadHandler]() {
+      // L'upload est traité AVANT le handler final : vérifier chaque callback
+      // avant toute écriture flash. Le handler final refuse la requête non authentifiée.
+      if (isAuthenticated()) (this->*uploadHandler)();
+    });
+  } else {
+    _srv.on(uri, method, authenticatedHandler);
+  }
+}
+
 void Portal::begin(bool startApFallbackIfNoWifi) {
   if (startApFallbackIfNoWifi && !WiFi.isConnected()) {
     startAp();
   }
 
-  _srv.on("/", HTTP_GET, [this]{ handleIndex(); });
-  _srv.on("/api/ping", HTTP_GET, [this]{ handlePing(); });
-  _srv.on("/api/config", HTTP_GET, [this]{ handleGetConfig(); });
-  _srv.on("/api/config", HTTP_POST, [this]{ handlePostConfig(); });
-  _srv.on("/api/reboot", HTTP_POST, [this]{ handleReboot(); });
-  _srv.on("/api/logs", HTTP_GET, [this]{ handleGetLogs(); });
-  _srv.on("/api/logs/clear", HTTP_POST, [this]{ handleClearLogs(); });
-  _srv.on("/logs", HTTP_GET, [this]{ handleLogsPage(); });
-  _srv.on("/api/status", HTTP_GET, [this]{ handleStatus(); });
-  _srv.on("/logs-radio", HTTP_GET, [this]{ handleRadioLogsPage(); });
-  _srv.on("/api/memory", HTTP_GET, [this]{ handleMemoryRead(); });
-  _srv.on("/api/memory/scan", HTTP_GET, [this]{ handleMemoryScan(); });
-  _srv.on("/memory", HTTP_GET, [this]{ handleMemoryPage(); });
-  _srv.on("/api/radio/send", HTTP_POST, [this]{ handleSendRadio(); });
-  _srv.on("/api/update", HTTP_POST, [this]{ handleUpdate(); }, [this]{ handleUpdateUpload(); });
-  _srv.on("/api/connect/pair", HTTP_POST, [this]{ handlePairConnect(); });
-  _srv.on("/api/sonde-ext/pair", HTTP_POST, [this]{ handlePairSondeExt(); });
-  _srv.on("/api/satellite/z1/pair", HTTP_POST, [this]{ handlePairSatelliteZ1(); });
-  _srv.on("/api/satellite/z2/pair", HTTP_POST, [this]{ handlePairSatelliteZ2(); });
-  _srv.on("/api/satellite/z3/pair", HTTP_POST, [this]{ handlePairSatelliteZ3(); });
-  _srv.on("/api/network-id/recup", HTTP_POST, [this]{ handleRecupNetworkId(); });
+  const char* headerKeys[] = {"Cookie"};
+  _srv.collectHeaders(headerKeys, 1);
+  _srv.on("/login", HTTP_GET, [this] { handleLoginPage(); });
+  _srv.on("/login", HTTP_POST, [this] { handleLogin(); });
+  onAuthenticated("/logout", HTTP_POST, &Portal::handleLogout);
+
+  onAuthenticated("/", HTTP_GET, &Portal::handleIndex);
+  onAuthenticated("/settings", HTTP_GET, &Portal::handleSettingsPage);
+  onAuthenticated("/logo.png", HTTP_GET, &Portal::handleLogo);
+  onAuthenticated("/api/ping", HTTP_GET, &Portal::handlePing);
+  onAuthenticated("/api/dashboard", HTTP_GET, &Portal::handleDashboard);
+  onAuthenticated("/programming", HTTP_GET, &Portal::handleProgrammationPage);
+  onAuthenticated("/api/programming", HTTP_GET, &Portal::handleGetProgrammation);
+  onAuthenticated("/api/programming", HTTP_POST, &Portal::handlePostProgrammation);
+  onAuthenticated("/api/config", HTTP_GET, &Portal::handleGetConfig);
+  onAuthenticated("/api/config", HTTP_POST, &Portal::handlePostConfig);
+  onAuthenticated("/api/reboot", HTTP_POST, &Portal::handleReboot);
+  onAuthenticated("/api/logs", HTTP_GET, &Portal::handleGetLogs);
+  onAuthenticated("/api/logs/clear", HTTP_POST, &Portal::handleClearLogs);
+  onAuthenticated("/logs", HTTP_GET, &Portal::handleLogsPage);
+  onAuthenticated("/api/status", HTTP_GET, &Portal::handleStatus);
+  onAuthenticated("/logs-radio", HTTP_GET, &Portal::handleRadioLogsPage);
+  onAuthenticated("/api/memory", HTTP_GET, &Portal::handleMemoryRead);
+  onAuthenticated("/api/memory/scan", HTTP_GET, &Portal::handleMemoryScan);
+  onAuthenticated("/memory", HTTP_GET, &Portal::handleMemoryPage);
+  onAuthenticated("/api/radio/send", HTTP_POST, &Portal::handleSendRadio);
+  onAuthenticated("/api/update", HTTP_POST, &Portal::handleUpdate, &Portal::handleUpdateUpload);
+  onAuthenticated("/api/connect/pair", HTTP_POST, &Portal::handlePairConnect);
+  onAuthenticated("/api/sonde-ext/pair", HTTP_POST, &Portal::handlePairSondeExt);
+  onAuthenticated("/api/satellite/z1/pair", HTTP_POST, &Portal::handlePairSatelliteZ1);
+  onAuthenticated("/api/satellite/z2/pair", HTTP_POST, &Portal::handlePairSatelliteZ2);
+  onAuthenticated("/api/satellite/z3/pair", HTTP_POST, &Portal::handlePairSatelliteZ3);
+  onAuthenticated("/api/network-id/recup", HTTP_POST, &Portal::handleRecupNetworkId);
 
 
   _srv.onNotFound([this](){
+    if (!requireAuthentication()) return;
     _srv.send(404, "text/plain; charset=utf-8", "404 Non trouvé");
   });
 
@@ -239,8 +399,186 @@ void Portal::handleIndex() {
   _srv.send(200, "text/html; charset=utf-8", html());
 }
 
+void Portal::handleSettingsPage() {
+  _srv.send(200, "text/html; charset=utf-8", settingsHtml());
+}
+
+void Portal::handleProgrammationPage() {
+  _srv.send(200, "text/html; charset=utf-8", programmationHtml());
+}
+
+static String programmationHex(const Zone::Programmation& programmation) {
+  static_assert(sizeof(Zone::Programmation) == 42, "Programmation : 42 octets");
+  const byte* bytes = reinterpret_cast<const byte*>(&programmation);
+  const char* digits = "0123456789ABCDEF";
+  String hex;
+  hex.reserve(84);
+  for(size_t i = 0; i < sizeof(programmation); ++i) {
+    hex += digits[bytes[i] >> 4];
+    hex += digits[bytes[i] & 0x0F];
+  }
+  return hex;
+}
+
+static String programmationRevision(Zone& zone) {
+  return String(zone.programmationRecue() ? "1" : "0") + programmationHex(zone.getProgrammation());
+}
+
+static String programmationReadOnlyReason(Config& cfg, Connect& connect, Zone& zone, bool enabled) {
+  if(!enabled) return "Cette zone est désactivée.";
+  if(zone.getSource() == Zone::SOURCE::SATELLITE_VIRTUEL) return "";
+  if(!cfg.useConnect()) return "Activez le Connect virtuel pour modifier la programmation.";
+  if(cfg.useConnectPassive()) return "Le Connect est en écoute passive : programmation en lecture seule.";
+  if(zone.getSource() != Zone::SOURCE::CONNECT) return "La modification de programmation nécessite une zone pilotée par le Connect.";
+  if(!connect.estAssocie()) return "Associez le Connect avant de modifier la programmation.";
+  if(zone.getMode() == Zone::MODE_ZONE::INCONNU || isnan(zone.getTemperatureConfort()) ||
+     isnan(zone.getTemperatureReduit()) || isnan(zone.getTemperatureHorsGel())) {
+    return "Les paramètres de la zone doivent être récupérés avant de modifier sa programmation.";
+  }
+  return "";
+}
+
+void Portal::handleGetProgrammation() {
+  auto& cfg = _frisquetManager.config();
+  auto& connect = _frisquetManager.connect();
+  const bool enabled[] = {cfg.useZone1(), cfg.useZone2(), cfg.useZone3()};
+  Zone* zones[] = {&connect.getZone1(), &connect.getZone2(), &connect.getZone3()};
+  String json = "{\"ok\":true,\"zones\":[";
+  json.reserve(1600);
+  for(uint8_t i = 0; i < 3; ++i) {
+    Zone& zone = *zones[i];
+    String reason = programmationReadOnlyReason(cfg, connect, zone, enabled[i]);
+    if(i) json += ",";
+    json += "{\"id\":" + String(i + 1);
+    json += ",\"enabled\":" + String(enabled[i] ? "true" : "false");
+    json += ",\"editable\":" + String(reason.isEmpty() ? "true" : "false");
+    json += ",\"reason\":\"" + jsonEscape(reason) + "\"";
+    json += ",\"known\":" + String(zone.programmationRecue() ? "true" : "false");
+    json += ",\"pending\":" + String(zone.programmationEnvoiEnAttente() ? "true" : "false");
+    json += ",\"mode\":\"" + jsonEscape(zone.getNomMode()) + "\"";
+    json += ",\"program\":\"" + programmationHex(zone.getProgrammation()) + "\"";
+    json += ",\"revision\":\"" + programmationRevision(zone) + "\"}";
+  }
+  json += "]}";
+  _srv.sendHeader("Cache-Control", "no-store");
+  _srv.send(200, "application/json; charset=utf-8", json);
+}
+
+void Portal::handlePostProgrammation() {
+  String numero = _srv.arg("zone");
+  if(numero != "1" && numero != "2" && numero != "3") {
+    _srv.send(400, "application/json; charset=utf-8", "{\"ok\":false,\"err\":\"Zone invalide.\"}");
+    return;
+  }
+  auto& cfg = _frisquetManager.config();
+  auto& connect = _frisquetManager.connect();
+  const bool enabled[] = {cfg.useZone1(), cfg.useZone2(), cfg.useZone3()};
+  Zone* zones[] = {&connect.getZone1(), &connect.getZone2(), &connect.getZone3()};
+  const uint8_t index = numero.toInt() - 1;
+  Zone& zone = *zones[index];
+  String reason = programmationReadOnlyReason(cfg, connect, zone, enabled[index]);
+  if(!reason.isEmpty()) {
+    _srv.send(409, "application/json; charset=utf-8", "{\"ok\":false,\"err\":\"" + jsonEscape(reason) + "\"}");
+    return;
+  }
+  Zone::Programmation programmation;
+  size_t length = 0;
+  String hex = _srv.arg("program");
+  if(hex.length() != 84 || !hexStringToBufferRaw(hex, reinterpret_cast<byte*>(&programmation), sizeof(programmation), length) || length != sizeof(programmation)) {
+    _srv.send(400, "application/json; charset=utf-8", "{\"ok\":false,\"err\":\"Programmation invalide : sept journées complètes sont nécessaires.\"}");
+    return;
+  }
+  if(_srv.arg("revision") != programmationRevision(zone)) {
+    _srv.send(409, "application/json; charset=utf-8", "{\"ok\":false,\"err\":\"La programmation a changé depuis son chargement. Rechargez-la avant d’enregistrer.\"}");
+    return;
+  }
+  zone.modifierProgrammation(programmation);
+  zone.saveConfig();
+  info("[PORTAIL] Programmation de la zone %d enregistrée (%s).", index + 1,
+       zone.programmationEnvoiEnAttente() ? "envoi Connect en attente" : "programme local");
+  _srv.send(200, "application/json; charset=utf-8", "{\"ok\":true,\"revision\":\"" + programmationRevision(zone)
+       + "\",\"pending\":" + String(zone.programmationEnvoiEnAttente() ? "true" : "false") + "}");
+}
+
+void Portal::handleLogo() {
+  _srv.send_P(200, "image/png",
+              reinterpret_cast<const char*>(WebAssets::LOGO_PNG),
+              WebAssets::LOGO_PNG_SIZE);
+}
+
 void Portal::handlePing() {
   _srv.send(200, "application/json", "{\"ok\":true}");
+}
+
+void Portal::handleDashboard() {
+  auto& cfg = _frisquetManager.config();
+  auto& chaudiere = _frisquetManager.chaudiere();
+  auto etat = chaudiere.getEtatChaudiere();
+
+  String json;
+  json.reserve(2400);
+  json = "{\"ok\":true,";
+  json += "\"developerMode\":" + String(cfg.developerMode() ? "true" : "false") + ",";
+  json += "\"version\":\"" + jsonEscape(String(OPENFRISQUETVISIO_VERSION)) + "\",";
+  json += "\"uptimeSec\":" + String(millis() / 1000) + ",";
+  json += "\"connectivity\":{";
+  json += "\"wifiConnected\":" + String(WiFi.isConnected() ? "true" : "false") + ",";
+  json += "\"mqttConnected\":" + String(_frisquetManager.mqtt().connected() ? "true" : "false") + ",";
+  json += "\"ssid\":\"" + jsonEscape(WiFi.isConnected() ? WiFi.SSID() : String()) + "\",";
+  json += "\"ip\":\"" + jsonEscape(WiFi.isConnected() ? WiFi.localIP().toString() : String()) + "\",";
+  json += "\"rssi\":" + String(WiFi.isConnected() ? WiFi.RSSI() : 0);
+  json += "},";
+
+  const bool chaudiereEnabled = cfg.useConnect()
+      || cfg.useSatelliteZ1() || cfg.useSatelliteZ2() || cfg.useSatelliteZ3();
+  json += "\"boiler\":{";
+  json += "\"enabled\":" + String(chaudiereEnabled ? "true" : "false") + ",";
+  json += "\"state\":\"" + jsonEscape(chaudiere.getNomEtatChaudiere()) + "\",";
+  json += "\"anomaly\":" + String(!chaudiere.etatChaudiereConnu() ? "null" : etat.anomalieDetecte() ? "true" : "false") + ",";
+  json += "\"hotWaterMode\":\"" + jsonEscape(chaudiere.getNomModeECS()) + "\",";
+  json += "\"outdoorTemperature\":" + jsonFloat(chaudiere.getTemperatureExterieure()) + ",";
+  json += "\"hotWaterTemperature\":" + jsonFloat(chaudiere.getTemperatureECS()) + ",";
+  json += "\"heatingBodyTemperature\":" + jsonFloat(chaudiere.getTemperatureCDC()) + ",";
+  json += "\"flueTemperature\":" + jsonFloat(chaudiere.getTemperatureFumees()) + ",";
+  json += "\"pressure\":" + jsonFloat(chaudiere.getPression(), 2) + ",";
+  json += "\"hotWaterPower\":" + jsonFloat(chaudiere.getPuissanceInstantaneeECS()) + ",";
+  json += "\"heatingPower\":" + jsonFloat(chaudiere.getPuissanceInstantaneeChauffage()) + ",";
+  json += "\"hotWaterConsumption\":" + jsonIntOrNull(chaudiere.getConsommationECS()) + ",";
+  json += "\"heatingConsumption\":" + jsonIntOrNull(chaudiere.getConsommationChauffage());
+  json += "},";
+
+  json += "\"outdoorProbe\":{";
+  json += "\"enabled\":" + String(cfg.useSondeExterieure() ? "true" : "false") + ",";
+  json += "\"temperature\":" + jsonFloat(_frisquetManager.sondeExterieure().getTemperatureExterieure());
+  json += "},";
+
+  json += "\"zones\":[";
+  auto appendZone = [&](uint8_t id, bool enabled, Zone& zone) {
+    const char* source = "Satellite physique";
+    if (zone.getSource() == Zone::SOURCE::CONNECT) source = "Connect";
+    else if (zone.getSource() == Zone::SOURCE::SATELLITE_VIRTUEL) source = "Satellite virtuel";
+
+    json += "{";
+    json += "\"id\":" + String(id) + ",";
+    json += "\"enabled\":" + String(enabled ? "true" : "false") + ",";
+    json += "\"source\":\"" + String(source) + "\",";
+    json += "\"mode\":\"" + jsonEscape(zone.getNomMode()) + "\",";
+    json += "\"boost\":" + String(zone.boostActif() ? "true" : "false") + ",";
+    json += "\"ambientTemperature\":" + jsonFloat(zone.getTemperatureAmbiante()) + ",";
+    json += "\"setpointTemperature\":" + jsonFloat(zone.getTemperatureConsigne()) + ",";
+    json += "\"flowTemperature\":" + jsonFloat(zone.getTemperatureDepart()) + ",";
+    json += "\"flowSetpointTemperature\":" + jsonFloat(zone.getTemperatureConsigneDepart());
+    json += "}";
+  };
+
+  appendZone(1, cfg.useZone1(), _frisquetManager.connect().getZone1());
+  json += ",";
+  appendZone(2, cfg.useZone2(), _frisquetManager.connect().getZone2());
+  json += ",";
+  appendZone(3, cfg.useZone3(), _frisquetManager.connect().getZone3());
+  json += "]}";
+
+  _srv.send(200, "application/json; charset=utf-8", json);
 }
 
 void Portal::handleGetConfig() {
@@ -248,6 +586,21 @@ void Portal::handleGetConfig() {
   auto& m = _frisquetManager.config().getMQTTOptions();
 
   String json = "{";
+  json += "\"developerMode\":" + String(_frisquetManager.config().developerMode() ? "true" : "false") + ",";
+  if (_frisquetManager.config().developerMode()) {
+    const auto& cfg = _frisquetManager.config();
+    json += "\"radioRxBandwidth\":" + String(cfg.radioRxBandwidth(), 1) + ",";
+    json += "\"radioLnaBypass\":" + String(cfg.radioLnaBypass() ? "true" : "false") + ",";
+    json += "\"radioBypassSupported\":" + String(RadioSettings::supportsLnaBypass() ? "true" : "false") + ",";
+    json += "\"radioRxBandwidths\":[";
+    bool first = true;
+    for (float bandwidth : RadioSettings::RX_BANDWIDTHS) {
+      if (!first) json += ",";
+      first = false;
+      json += String(bandwidth, 1);
+    }
+    json += "],";
+  }
   json += "\"wifiHostname\":\"" + jsonEscape(String(w.hostname)) + "\",";
   json += "\"wifiSsid\":\"" + jsonEscape(String(w.ssid)) + "\",";
   json += "\"wifiPass\":\"" + jsonEscape(String(w.password)) + "\",";
@@ -308,6 +661,53 @@ void Portal::handlePostConfig() {
   if (_srv.method() != HTTP_POST) {
     _srv.send(405, "application/json", "{\"ok\":false,\"err\":\"Méthode non autorisée\"}");
     return;
+  }
+
+  auto& cfg = _frisquetManager.config();
+  // Ne jamais renvoyer le mot de passe dans GET /api/config. Un champ vide
+  // conserve la valeur existante ; valider avant toute mutation de paramètres.
+  const String portalPassword = _srv.arg("portalPassword");
+  const String portalPasswordConfirm = _srv.arg("portalPasswordConfirm");
+  const bool changePortalPassword = !portalPassword.isEmpty();
+  if (portalPassword.length() > 64
+      || strlen(portalPassword.c_str()) != portalPassword.length()
+      || portalPassword != portalPasswordConfirm) {
+    _srv.send(400, "application/json; charset=utf-8",
+              "{\"ok\":false,\"err\":\"Les mots de passe doivent être identiques et ne pas dépasser 64 octets\"}");
+    return;
+  }
+  // Valider les réglages radio avant toute modification de la configuration.
+  const bool hasBandwidth = _srv.hasArg("radioRxBandwidth");
+  const bool hasBypass = _srv.hasArg("radioLnaBypass");
+  float rxBandwidth = cfg.radioRxBandwidth();
+  bool lnaBypass = cfg.radioLnaBypass();
+  if (hasBandwidth || hasBypass) {
+    if (!requireDeveloperMode()) return;
+    if (hasBandwidth) {
+      String value = _srv.arg("radioRxBandwidth");
+      value.trim();
+      char* end = nullptr;
+      rxBandwidth = strtof(value.c_str(), &end);
+      if (value.length() == 0 || !end || *end != '\0' || !RadioSettings::validRxBandwidth(rxBandwidth)) {
+        _srv.send(400, "application/json; charset=utf-8",
+                  "{\"ok\":false,\"err\":\"Bande RX non prise en charge par le SX1262\"}");
+        return;
+      }
+    }
+    if (hasBypass) {
+      if (!RadioSettings::supportsLnaBypass()) {
+        _srv.send(400, "application/json; charset=utf-8",
+                  "{\"ok\":false,\"err\":\"Bypass LNA disponible uniquement sur Heltec V4.3 avec KCT8103L\"}");
+        return;
+      }
+      const String value = _srv.arg("radioLnaBypass");
+      if (value != "true" && value != "false" && value != "1" && value != "0") {
+        _srv.send(400, "application/json; charset=utf-8",
+                  "{\"ok\":false,\"err\":\"Valeur de bypass LNA invalide\"}");
+        return;
+      }
+      lnaBypass = value == "true" || value == "1";
+    }
   }
 
   auto& w = _frisquetManager.config().getWiFiOptions();
@@ -461,7 +861,16 @@ void Portal::handlePostConfig() {
     _frisquetManager.config().useSatelliteVirtualZ3(v);
   }
 
+  if (_srv.hasArg("developerMode")) {
+    auto& cfg = _frisquetManager.config();
+    cfg.developerMode(parseBoolArg(_srv.arg("developerMode"), cfg.developerMode()));
+  }
+
+  if (changePortalPassword) cfg.portalPassword(portalPassword);
+  if (hasBandwidth) cfg.radioRxBandwidth(rxBandwidth);
+  if (hasBypass) cfg.radioLnaBypass(lnaBypass);
   _frisquetManager.config().save();
+  if (changePortalPassword) clearSessions();
   info("[PORTAIL] Configuration enregistrée, redémarrage programmé");
 
   _srv.send(200, "application/json; charset=utf-8", "{\"ok\":true,\"reboot\":true}");
@@ -501,6 +910,8 @@ void Portal::handleGetLogs() {
   if (_srv.hasArg("level")) {
     level = _srv.arg("level");
   }
+
+  if (level.equalsIgnoreCase("RADIO") && !requireDeveloperMode()) return;
 
   size_t outCount = logs.getLines(s_logLines, kMaxQueryLines, limit,
                                   level.length() > 0 ? level.c_str() : nullptr);
@@ -606,6 +1017,7 @@ void Portal::handleStatus() {
 }
 
 void Portal::handleSendRadio() {
+  if (!requireDeveloperMode()) return;
   if (_srv.method() != HTTP_POST) {
     _srv.send(405, "application/json; charset=utf-8",
               "{\"ok\":false,\"err\":\"Méthode non autorisée\"}");
@@ -640,32 +1052,59 @@ void Portal::handleSendRadio() {
     }
   }
 
-  info("[PORTAIL] Demande d'envoi trame RADIO: %s", hex.c_str());
-
   byte payload[100];
   size_t payloadLength = 0;
-  hexStringToBufferRaw(hex, payload, 100, payloadLength);
-
-  logRadio(false, payload, payloadLength);
-  //_frisquetManager.radio().interruptReceive = true;
-  _frisquetManager.radio().transmit(payload, payloadLength);
-  //_frisquetManager.radio().interruptReceive = false;
-
-  bool ok = true;
-
-  if (ok) {
-    _srv.send(200, "application/json; charset=utf-8", "{\"ok\":true}");
-  } else {
-    _srv.send(500, "application/json; charset=utf-8",
-              "{\"ok\":false,\"err\":\"Échec envoi radio\"}");
+  if (!hexStringToBufferRaw(hex, payload, sizeof(payload), payloadLength) || payloadLength == 0) {
+    _srv.send(400, "application/json; charset=utf-8",
+              "{\"ok\":false,\"err\":\"Trame hexadécimale invalide ou trop longue (100 octets maximum)\"}");
+    return;
   }
+
+  // Ne pas écraser un vrai paquet RX en attente de traitement par loop().
+  if (FrisquetRadio::receivedFlag || FrisquetRadio::interruptReceive) {
+    _srv.send(409, "application/json; charset=utf-8",
+              "{\"ok\":false,\"err\":\"Radio occupée, réessayez après traitement de la réception\"}");
+    return;
+  }
+
+  auto& radio = _frisquetManager.radio();
+  // Le DIO utilisé pour RX signale aussi TxDone : masquer le callback pendant TX.
+  FrisquetRadio::interruptReceive = true;
+  const int16_t txResult = radio.transmit(payload, payloadLength);
+  // transmit() a effacé les IRQ TX. Réactiver le callback AVANT de réarmer RX
+  // pour que la première vraie réponse ne soit pas ignorée.
+  FrisquetRadio::interruptReceive = false;
+  const int16_t rxResult = radio.startReceive();
+
+  // Journaliser après réarmement pour ne pas retarder la reprise de l'écoute.
+  logRadio(false, payload, payloadLength);
+  if (txResult != RADIOLIB_ERR_NONE) {
+    _srv.send(500, "application/json; charset=utf-8",
+              "{\"ok\":false,\"err\":\"Échec envoi radio\",\"code\":" + String(txResult) + "}");
+    return;
+  }
+  if (rxResult != RADIOLIB_ERR_NONE) {
+    _srv.send(500, "application/json; charset=utf-8",
+              "{\"ok\":false,\"err\":\"Trame envoyée, mais échec de reprise de l'écoute radio\",\"code\":" + String(rxResult) + "}");
+    return;
+  }
+  _srv.send(200, "application/json; charset=utf-8", "{\"ok\":true}");
+}
+
+bool Portal::requireDeveloperMode() {
+  if (_frisquetManager.config().developerMode()) return true;
+  _srv.send(403, "application/json; charset=utf-8",
+            "{\"ok\":false,\"err\":\"Activez le mode développeur dans les paramètres système.\"}");
+  return false;
 }
 
 void Portal::handleRadioLogsPage() {
+  if (!requireDeveloperMode()) return;
   _srv.send(200, "text/html; charset=utf-8", logsRadioHtml());
 }
 
 void Portal::handleMemoryRead() {
+  if (!requireDeveloperMode()) return;
   if (_srv.method() != HTTP_GET) {
     _srv.send(405, "application/json; charset=utf-8",
               "{\"ok\":false,\"err\":\"Méthode non autorisée\"}");
@@ -817,6 +1256,7 @@ void Portal::handleMemoryRead() {
 }
 
 void Portal::handleMemoryScan() {
+  if (!requireDeveloperMode()) return;
   if (_srv.method() != HTTP_GET) {
     _srv.send(405, "application/json; charset=utf-8",
               "{\"ok\":false,\"err\":\"Méthode non autorisée\"}");
@@ -947,6 +1387,7 @@ void Portal::handleMemoryScan() {
 }
 
 void Portal::handleMemoryPage() {
+  if (!requireDeveloperMode()) return;
   _srv.send(200, "text/html; charset=utf-8", memoryHtml());
 }
 
@@ -1213,1601 +1654,33 @@ void Portal::startAp() {
 }
 
 String Portal::html() {
-  String page = R"HTML(
-<!DOCTYPE html><html lang='fr'><head>
-<meta charset='utf-8'>
-<meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>OpenFrisquetVisio – Configuration</title>
-<style>
-  :root{
-    --bg:#0f1115;--card:#171a21;--muted:#8a8f98;--txt:#e7e9ee;
-    --acc:#3aa3ff;--bd:#2a2f39;--ok:#1fb86a;--warn:#ffb020
-  }
-  *,*:before,*:after{box-sizing:border-box}
-  body{margin:0;padding:24px;background:var(--bg);color:var(--txt);font:15px/1.45 system-ui,Segoe UI,Roboto,Arial}
-  h1,h2{margin:0 0 12px}
-  a{color:var(--acc);text-decoration:none}
-  .wrap{max-width:980px;margin:0 auto;display:grid;gap:16px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  .grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
-  .grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
-  .card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:18px;box-shadow:0 4px 16px rgba(0,0,0,.2)}
-  .row{display:flex;flex-direction:column;gap:6px}
-  .row-inline{display:flex;gap:8px;align-items:center}
-  .row-inline input{flex:1}
-  label{font-weight:600}
-  .hint{color:var(--muted);font-size:12px}
-  input[type=text],input[type=password],input[type=number],select{
-    width:100%;padding:10px 12px;border:1px solid var(--bd);border-radius:10px;
-    background:#0d1016;color:var(--txt)
-  }
-  .pw{position:relative}
-  .pw button{
-    position:absolute;right:8px;top:50%;transform:translateY(-50%);
-    border:1px solid var(--bd);background:#0d1016;color:var(--muted);
-    padding:4px 8px;border-radius:8px;cursor:pointer;font-size:12px
-  }
-  .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
-  .btn{
-    display:inline-flex;align-items:center;gap:8px;border:1px solid var(--bd);
-    background:#0d1016;color:var(--txt);padding:10px 14px;border-radius:10px;
-    cursor:pointer;text-decoration:none
-  }
-  .btn.primary{background:var(--acc);color:#061019;border-color:transparent;font-weight:700}
-  .badge{
-    display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;
-    border:1px solid var(--bd);background:#10131a;font-size:13px
-  }
-  .ok{color:var(--ok)} .warn{color:var(--warn)}
-  .split{display:grid;grid-template-columns:1.3fr .7fr;gap:16px}
-  .footer{color:var(--muted);font-size:12px;text-align:center;margin-top:8px}
-  .msg{margin-top:10px;padding:10px;border-radius:8px;background:#111827;color:#e5e7eb;display:none}
-  .msg.show{display:block}
-  @media (max-width:820px){
-    .grid,.grid-3, .grid-2, .split{grid-template-columns:1fr}
-  }
-  .btn.btn-sm{
-    padding:6px 10px;
-    font-size:13px;
-  }
-</style>
-</head><body>
-<div class='wrap'>
-
-  <div class='split'>
-    <div class='card'>
-      <h2>OpenFrisquetVisio – Configuration</h2>
-      <p class='hint'>
-        Renseignez le Wi-Fi, le broker MQTT et les options Frisquet puis cliquez sur
-        <strong>Enregistrer</strong>.
-      </p>
-
-      <form id='form' autocomplete='off'>
-
-        <div class='card' style='background:#14171f;margin-bottom:12px'>
-          <h3 style='margin:0 0 8px;font-size:15px'>Wi-Fi</h3>
-          <div class='grid'>
-            <div class='row'>
-              <label>Nom d'hôte</label>
-              <input id='wifiHostname' type='text' placeholder='esp32-device'>
-              <div class='hint'>Nom utilisé sur le réseau (mDNS / logs).</div>
-            </div>
-            <div class='row'>
-              <label>SSID Wi-Fi</label>
-              <input id='wifiSsid' type='text' placeholder='MaBox'>
-              <div class='hint'>Nom du réseau (2.4 GHz recommandé).</div>
-            </div>
-          </div>
-          <div class='grid'>
-            <div class='row pw'>
-              <label>Mot de passe Wi-Fi</label>
-              <input id='wifiPass' type='password' placeholder='••••••••'>
-              <button type='button' data-toggle='#wifiPass'>Afficher</button>
-            </div>
-          </div>
-          <div style='margin-top:10px'>
-            <label class='check-row'>
-              <input id='wifiStatic' type='checkbox'>
-              <span>Utiliser une IP statique (DHCP désactivé)</span>
-            </label>
-            <div class='hint'>Cochez pour saisir une adresse IP, gateway, masque et DNS.</div>
-          </div>
-
-          <div id='wifiStaticBlock' style='display:none;margin-top:6px'>
-            <div style='margin-top:8px' class='grid-3'>
-              <div class='row'>
-                <label>Adresse IP</label>
-                <input id='wifiIp' type='text' placeholder='192.168.1.50'>
-              </div>
-              <div class='row'>
-                <label>Gateway</label>
-                <input id='wifiGw' type='text' placeholder='192.168.1.1'>
-              </div>
-              <div class='row'>
-                <label>Masque</label>
-                <input id='wifiMask' type='text' placeholder='255.255.255.0'>
-              </div>
-            </div>
-
-            <div style='margin-top:8px' class='grid-2'>
-              <div class='row'>
-                <label>DNS 1</label>
-                <input id='wifiDns1' type='text' placeholder='1.1.1.1'>
-              </div>
-              <div class='row'>
-                <label>DNS 2</label>
-                <input id='wifiDns2' type='text' placeholder='8.8.8.8'>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class='card' style='background:#14171f;margin-bottom:12px'>
-          <h3 style='margin:0 0 8px;font-size:15px'>MQTT</h3>
-          <div class='grid-3'>
-            <div class='row'>
-              <label>Client ID</label>
-              <input id='mqttClientId' type='text' placeholder='OpenFrisquetVisio'>
-            </div>
-            <div class='row'>
-              <label>Base topic</label>
-              <input id='mqttBaseTopic' type='text' placeholder='frisquet'>
-            </div>
-            <div class='row'>
-              <label>Hôte</label>
-              <input id='mqttHost' type='text' placeholder='192.168.1.10'>
-            </div>
-          </div>
-          <div class='grid-3' style='margin-top:8px'>
-            <div class='row'>
-              <label>Port</label>
-              <input id='mqttPort' type='number' min='1' max='65535' placeholder='1883'>
-            </div>
-            <div class='row'>
-              <label>Utilisateur</label>
-              <input id='mqttUser' type='text' placeholder='(optionnel)'>
-            </div>
-            <div class='row pw'>
-              <label>Mot de passe MQTT</label>
-              <input id='mqttPass' type='password' placeholder='(optionnel)'>
-              <button type='button' data-toggle='#mqttPass'>Afficher</button>
-            </div>
-          </div>
-        </div>
-
-
-        <div class='card' style='background:#14171f;margin-bottom:12px'>
-          <h3 style='margin:0 0 8px;font-size:15px'>Frisquet</h3>
-          <hr />
-          <div class='row' style='margin-bottom:10px'>
-            <label>NetworkID</label>
-            <div class='row-inline'>
-              <input id='networkID' type='text' placeholder='00:00:00:00'>
-              <button type='button' class='btn btn-sm' id='btnRecupNetworkID'>
-                Récupérer
-              </button>
-            </div>
-            <div class='hint'>
-              Identifiant réseau au format <code>AA:BB:CC:DD</code>.
-            </div>
-          </div>
-
-          <div class='grid-2'>
-            <div class='row'>
-              <label>Mode Connect</label>
-              <select id='useConnectMode'>
-                <option value='0'>Ne pas utiliser le système Connect</option>
-                <option value='1'>Utiliser le Frisquet Connect virtuel</option>
-                <option value='2'>Utiliser le Frisquet Connect physique (écoute uniquement)</option>
-              </select>
-              <div class='hint'>Le mode virtuel permet l'association et l'envoi de commandes, le mode physique est passif.</div>
-            </div>
-
-            <div class="row">
-              <button type='button' class='btn btn-sm' id='btnPairConnect' style='margin-top:6px;display:none'>
-                Associer le Connect
-              </button>
-            </div>
-          </div>
-
-          <div class='grid-3' style="margin-top:10px">
-            <div class='row'>
-              <label>Mode Sonde extérieure</label>
-              <select id='useSondeMode'>
-                <option value='0'>Ne pas utiliser la sonde extérieure</option>
-                <option value='1'>Sonde extérieure Frisquet</option>
-                <option value='2'>Sonde extérieure virtuelle</option>
-                <option value='3'>Sonde extérieure avec DS18B20</option>
-              </select>
-              <div class='hint'>Les modes 0 et 1 n'activent pas la sonde extérieure.</div>
-            </div>
-            <div class='row'>
-              <button type='button' class='btn btn-sm' id='btnPairSondeExt' style='margin-top:6px;display:none'>
-                Associer la sonde extérieure
-              </button>
-            </div>
-          </div>
-          <hr />
-          <h4>Gestion des zones</h4>
-
-          <div class='grid-3' style="margin-top:10px">
-            <div class='row'>
-              <label>Mode Zone 1</label>
-              <select id='useZoneMode1'>
-                <option value='0'>Pas de gestion de la zone</option>
-                <option value='1'>Gérer la zone avec satellite physique</option>
-                <option value='2'>Gérer la zone avec satellite virtuel</option>
-              </select>
-              <button type='button' class='btn btn-sm' id='btnPairSatZ1' style='margin-top:6px;display:none'>
-                Associer le Satellite Z1
-              </button>
-            </div>
-
-            <div class='row'>
-              <label>Mode Zone 2</label>
-              <select id='useZoneMode2'>
-                <option value='0'>Pas de gestion de la zone</option>
-                <option value='1'>Gérer la zone avec satellite physique</option>
-                <option value='2'>Gérer la zone avec satellite virtuel</option>
-              </select>
-              <button type='button' class='btn btn-sm' id='btnPairSatZ2' style='margin-top:6px;display:none'>
-                Associer le Satellite Z2
-              </button>
-            </div>
-
-            <div class='row'>
-              <label>Mode Zone 3</label>
-              <select id='useZoneMode3'>
-                <option value='0'>Pas de gestion de la zone</option>
-                <option value='1'>Gérer la zone avec satellite physique</option>
-                <option value='2'>Gérer la zone avec satellite virtuel</option>
-              </select>
-              <button type='button' class='btn btn-sm' id='btnPairSatZ3' style='margin-top:6px;display:none'>
-                Associer le Satellite Z3
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div class='actions'>
-          <button class='btn primary' type='submit'>Enregistrer</button>
-          <button class='btn' type='button' id='btnReboot'>Redémarrer</button>
-          <a class='btn' href='/logs'>Voir les logs</a>
-          <a class='btn' href='/logs-radio'>Trames radio</a>
-          <a class='btn' href='/memory'>Mémoire chaudière</a>
-        </div>
-
-
-        <div id='msg' class='msg'></div>
-      </form>
-    </div>
-
-    <div class='card'>
-      <h2>Statut</h2>
-      <div class='row'>
-        <span class='badge'>
-          <span>Mode AP&nbsp;:</span>
-          <span id='badgeAp' class='warn'>inconnu</span>
-        </span>
-        <span class='badge'>
-          <span>Station Wi-Fi&nbsp;:</span>
-          <span id='badgeSta' class='warn'>inconnu</span>
-        </span>
-        <span class='badge'>
-          <span>Uptime&nbsp;:</span>
-          <span id='badgeUptime' class='warn'>inconnu</span>
-        </span>
-        <span class='badge'>
-          <span>Reset&nbsp;:</span>
-          <span id='badgeReset' class='warn'>inconnu</span>
-        </span>
-      </div>
-      <div class='row' style='margin-top:8px'>
-        <div class='hint'>
-          Si la station se déconnecte, un point d’accès de secours sera lancé automatiquement.
-        </div>
-      </div>
-    </div>
-
-    <div class='card'>
-      <h2>Mise à jour firmware</h2>
-      <p class='hint'>
-        Sélectionnez un fichier <code>.bin</code> compilé pour ce Heltec V3, puis lancez l’upload.
-        L’appareil redémarrera automatiquement.
-      </p>
-      <form id='fwForm'>
-        <div class='row'>
-          <label>Fichier firmware</label>
-          <input id='fwFile' type='file' accept='.bin'>
-        </div>
-        <div class='actions' style='margin-top:10px'>
-          <button class='btn' type='submit' id='fwBtn'>Uploader</button>
-        </div>
-        <div id='fwMsg' class='msg'></div>
-      </form>
-    </div>
-
-  </div>
-
-  <div class='footer'>
-    Portail de configuration – OpenFrisquetVisio · version {{OPENFRISQUETVISIO_VERSION}}
-  </div>
-</div>
-
-<script>
-const $ = sel => document.querySelector(sel);
-const msg = (t) => { const m=$("#msg"); if(!m) return; m.textContent=t; m.classList.add("show"); };
-const fwMsg = (t) => { const m=$("#fwMsg"); if(!m) return; m.textContent=t; m.classList.add("show"); };
-let savedCfg = {
-  useConnect: false,
-  useConnectPassive: false,
-  useSondeExt: false,
-  useDS18B20: false,
-  useZone1: false,
-  useZone2: false,
-  useZone3: false,
-  useSatelliteZ1: false,
-  useSatelliteZ2: false,
-  useSatelliteZ3: false,
-  useSatelliteVirtualZ1: false,
-  useSatelliteVirtualZ2: false,
-  useSatelliteVirtualZ3: false
-};
-
-const FIELDS = [
-  "wifiHostname","wifiSsid","wifiPass","wifiStatic","wifiIp","wifiGw","wifiMask","wifiDns1","wifiDns2",
-  "mqttHost","mqttPort","mqttUser","mqttPass",
-  "mqttClientId","mqttBaseTopic",
-  "networkID"
-];
-
-function updatePairButtons() {
-  const selConnectMode = $("#useConnectMode");
-  const selSondeMode = $("#useSondeMode");
-  const btnConnect = $("#btnPairConnect");
-  const btnSonde   = $("#btnPairSondeExt");
-
-  if (selConnectMode && btnConnect) {
-    const canPairConnect = savedCfg.useConnect && !savedCfg.useConnectPassive;
-    btnConnect.style.display = canPairConnect ? "inline-flex" : "none";
-  }
-  if (selSondeMode && btnSonde) {
-    btnSonde.style.display = savedCfg.useSondeExt ? "inline-flex" : "none";
-  }
-
-
-  const btnZ1 = $("#btnPairSatZ1");
-  const btnZ2 = $("#btnPairSatZ2");
-  const btnZ3 = $("#btnPairSatZ3");
-
-  if (btnZ1) btnZ1.style.display = savedCfg.useSatelliteZ1 && savedCfg.useSatelliteVirtualZ1 ? "inline-flex" : "none";
-  if (btnZ2) btnZ2.style.display = savedCfg.useSatelliteZ2 && savedCfg.useSatelliteVirtualZ2 ? "inline-flex" : "none";
-  if (btnZ3) btnZ3.style.display = savedCfg.useSatelliteZ3 && savedCfg.useSatelliteVirtualZ3 ? "inline-flex" : "none";
-}
-
-
-// Update the visibility / enabled state of the static IP inputs.
-function updateStaticInputs(){
-  const chkStatic = document.querySelector('#wifiStatic');
-  const staticBlock = document.querySelector('#wifiStaticBlock');
-  const ipInputs = ["#wifiIp","#wifiGw","#wifiMask","#wifiDns1","#wifiDns2"].map(s=>document.querySelector(s));
-  const enabled = chkStatic && chkStatic.checked;
-  if (staticBlock) staticBlock.style.display = enabled ? 'block' : 'none';
-  ipInputs.forEach(i=>{ if(!i) return; i.disabled = !enabled; i.style.opacity = enabled ? '1' : '0.6'; });
-}
-
-async function loadConfig() {
-  try {
-    const r = await fetch("/api/config",{cache:"no-store"});
-    const j = await r.json();
-    savedCfg.useConnect = !!j.useConnect;
-    savedCfg.useConnectPassive = !!j.useConnectPassive;
-    savedCfg.useSondeExt = !!j.useSondeExt;
-    savedCfg.useDS18B20 = !!j.useDS18B20;
-    savedCfg.useZone1 = !!j.useZone1;
-    savedCfg.useZone2 = !!j.useZone2;
-    savedCfg.useZone3 = !!j.useZone3;
-    savedCfg.useSatelliteZ1 = !!j.useSatelliteZ1;
-    savedCfg.useSatelliteZ2 = !!j.useSatelliteZ2;
-    savedCfg.useSatelliteZ3 = !!j.useSatelliteZ3;
-    savedCfg.useSatelliteVirtualZ1 = !!j.useSatelliteVirtualZ1;
-    savedCfg.useSatelliteVirtualZ2 = !!j.useSatelliteVirtualZ2;
-    savedCfg.useSatelliteVirtualZ3 = !!j.useSatelliteVirtualZ3;
-    const selConnectMode = $("#useConnectMode");
-    if (selConnectMode) {
-      if (!j.useConnect) {
-        selConnectMode.value = "0";
-      } else {
-        selConnectMode.value = j.useConnectPassive ? "2" : "1";
-      }
-    }
-    const selSondeMode = $("#useSondeMode");
-    if (selSondeMode) {
-      if (!j.useSondeExt) {
-        selSondeMode.value = "0";
-      } else {
-        selSondeMode.value = j.useDS18B20 ? "3" : "2";
-      }
-    }
-    const selZoneMode1 = $("#useZoneMode1");
-    const selZoneMode2 = $("#useZoneMode2");
-    const selZoneMode3 = $("#useZoneMode3");
-    if (selZoneMode1) {
-      selZoneMode1.value = !j.useSatelliteZ1 ? "0" : (j.useSatelliteVirtualZ1 ? "2" : "1");
-    }
-    if (selZoneMode2) {
-      selZoneMode2.value = !j.useSatelliteZ2 ? "0" : (j.useSatelliteVirtualZ2 ? "2" : "1");
-    }
-    if (selZoneMode3) {
-      selZoneMode3.value = !j.useSatelliteZ3 ? "0" : (j.useSatelliteVirtualZ3 ? "2" : "1");
-    }
-    FIELDS.forEach(id => {
-      const el = $("#"+id);
-      if (!el || j[id] === undefined) return;
-
-      if (el.type === "checkbox") {
-        el.checked = !!j[id];       // j[id] est un booléen côté JSON
-      } else {
-        el.value = j[id];
-      }
-    });
-    updatePairButtons();
-    // ensure static IP block is in correct state after loading config
-    try { updateStaticInputs(); } catch(e){}
-  } catch(e) {
-    msg("Impossible de charger la configuration.");
-  }
-}
-
-
-async function saveConfig(e) {
-  e.preventDefault();
-  const fd = new FormData();
-
-  const selConnectMode = document.querySelector('#useConnectMode');
-  if (selConnectMode) {
-    const mode = selConnectMode.value;
-    fd.append("useConnect", mode === "1" || mode === "2" ? "true" : "false");
-    fd.append("useConnectPassive", mode === "2" ? "true" : "false");
-  }
-  const selSondeMode = document.querySelector('#useSondeMode');
-  if (selSondeMode) {
-    const mode = selSondeMode.value;
-    fd.append("useSondeExt", mode === "2" || mode === "3" ? "true" : "false");
-    fd.append("useDS18B20", mode === "3" ? "true" : "false");
-  }
-  const selZoneMode1 = document.querySelector('#useZoneMode1');
-  if (selZoneMode1) {
-    const mode = selZoneMode1.value;
-    fd.append("useZone1", mode !== "0" ? "true" : "false");
-    fd.append("useSatelliteZ1", mode !== "0" ? "true" : "false");
-    fd.append("useSatelliteVirtualZ1", mode === "2" ? "true" : "false");
-  }
-  const selZoneMode2 = document.querySelector('#useZoneMode2');
-  if (selZoneMode2) {
-    const mode = selZoneMode2.value;
-    fd.append("useZone2", mode !== "0" ? "true" : "false");
-    fd.append("useSatelliteZ2", mode !== "0" ? "true" : "false");
-    fd.append("useSatelliteVirtualZ2", mode === "2" ? "true" : "false");
-  }
-  const selZoneMode3 = document.querySelector('#useZoneMode3');
-  if (selZoneMode3) {
-    const mode = selZoneMode3.value;
-    fd.append("useZone3", mode !== "0" ? "true" : "false");
-    fd.append("useSatelliteZ3", mode !== "0" ? "true" : "false");
-    fd.append("useSatelliteVirtualZ3", mode === "2" ? "true" : "false");
-  }
-
-  FIELDS.forEach(id => {
-    const el = document.querySelector('#'+id);
-    if (!el) return;
-
-    // If static IP mode is not enabled, don't send IP-related fields
-    if ((id === 'wifiIp' || id === 'wifiGw' || id === 'wifiMask' || id === 'wifiDns1' || id === 'wifiDns2')) {
-      const localChk = document.querySelector('#wifiStatic');
-      if (!(localChk && localChk.checked)) return;
-    }
-
-    if (el.type === "checkbox") {
-      fd.append(id, el.checked ? "true" : "false");
-    } else {
-      fd.append(id, el.value);
-    }
-  });
-
-  try {
-    const r = await fetch("/api/config", { method:"POST", body:fd });
-    const j = await r.json();
-    if (j.ok) {
-      msg("Configuration enregistrée. Redémarrage en cours…");
-      const start = Date.now();
-      const tryReload = async () => {
-        try {
-          const rr = await fetch("/api/ping",{cache:"no-store"});
-          if (rr.ok) location.reload();
-          else setTimeout(tryReload, 1500);
-        }
-        catch(_) {
-          if (Date.now()-start>25000) location.reload();
-          else setTimeout(tryReload,1500);
-        }
-      };
-      setTimeout(tryReload, 4000);
-    } else {
-      msg("Erreur : " + (j.err || "inconnue"));
-    }
-  } catch(e) {
-    msg("Erreur réseau lors de l'enregistrement.");
-  }
-}
-
-
-
-function setBadge(id, ok, text) {
-  const el = $("#"+id);
-  if (!el) return;
-  el.textContent = text;
-  el.className = ok ? "ok" : "warn";
-}
-
-function formatUptime(sec) {
-  const total = Math.max(0, Number(sec || 0));
-  const days = Math.floor(total / 86400);
-  const hours = Math.floor((total % 86400) / 3600);
-  const mins = Math.floor((total % 3600) / 60);
-  const secs = Math.floor(total % 60);
-  let out = "";
-  if (days > 0) out += days + "d ";
-  out += String(hours).padStart(2, "0") + ":" +
-         String(mins).padStart(2, "0") + ":" +
-         String(secs).padStart(2, "0");
-  return out;
-}
-
-async function loadStatus() {
-  try {
-    const r = await fetch("/api/status", { cache: "no-store" });
-    const j = await r.json();
-
-    // Mode AP
-    setBadge("badgeAp", j.apRunning, j.apRunning ? "actif" : "inactif");
-
-    // Station Wi-Fi
-    let staText;
-    if (j.staConnected) {
-      if (j.ip && j.ip.length) {
-        staText = "connectée (" + j.ip + ")";
-      } else {
-        staText = "connectée";
-      }
-    } else {
-      staText = "déconnectée";
-    }
-    setBadge("badgeSta", j.staConnected, staText);
-    setBadge("badgeUptime", true, formatUptime(j.uptimeSec));
-    setBadge("badgeReset", true, j.resetReason || "inconnu");
-  } catch (e) {
-    setBadge("badgeAp", false, "indisponible");
-    setBadge("badgeSta", false, "indisponible");
-    setBadge("badgeUptime", false, "indisponible");
-    setBadge("badgeReset", false, "indisponible");
-  }
-}
-
-async function pairConnect() {
-  try {
-    msg("Lancement de l'association du Connect…");
-    const r = await fetch("/api/connect/pair", { method:"POST" });
-    const j = await r.json();
-    if (j.ok) {
-      msg(j.msg || "Association Connect lancée. Consultez les logs RADIO.");
-    } else {
-      msg("Erreur association Connect : " + (j.err || "inconnue"));
-    }
-  } catch (e) {
-    msg("Erreur réseau lors de l'association Connect.");
-  }
-}
-
-async function pairSondeExt() {
-  try {
-    msg("Lancement de l'association de la sonde extérieure…");
-    const r = await fetch("/api/sonde-ext/pair", { method:"POST" });
-    const j = await r.json();
-    if (j.ok) {
-      msg(j.msg || "Association sonde extérieure lancée. Consultez les logs RADIO.");
-    } else {
-      msg("Erreur association sonde extérieure : " + (j.err || "inconnue"));
-    }
-  } catch (e) {
-    msg("Erreur réseau lors de l'association de la sonde extérieure.");
-  }
-}
-
-async function pairSatellite(zone) {
-  try {
-    msg("Lancement de l'association du Satellite " + zone + "…");
-    const r = await fetch("/api/satellite/z" + zone.toLowerCase() + "/pair", { method:"POST" });
-    const j = await r.json();
-    if (j.ok) {
-      msg(j.msg || ("Association Satellite " + zone + " lancée. Consultez les logs RADIO."));
-    } else {
-      msg("Erreur association Satellite " + zone + " : " + (j.err || "inconnue"));
-    }
-  } catch (e) {
-    msg("Erreur réseau lors de l'association Satellite " + zone + ".", false);
-  }
-}
-
-async function recupNetworkId() {
-  try {
-    msg("Récupération du NetworkID…");
-    const r = await fetch("/api/network-id/recup", { method:"POST" });
-    const j = await r.json();
-    if (j.ok) {
-      const input = $("#networkID");
-      if (input && j.networkID) input.value = j.networkID;
-      msg(j.msg || "NetworkID récupéré.");
-    } else {
-      msg("Erreur récupération NetworkID : " + (j.err || "inconnue"));
-    }
-  } catch (e) {
-    msg("Erreur réseau lors de la récupération du NetworkID.");
-  }
-}
-
-document.addEventListener("DOMContentLoaded", ()=>{
-  // Toggle password
-  document.querySelectorAll('[data-toggle]').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      const sel=btn.getAttribute('data-toggle');
-      const inp=document.querySelector(sel);
-      if(!inp) return;
-      inp.type = (inp.type==='password') ? 'text' : 'password';
-      btn.textContent = (inp.type==='password') ? 'Afficher' : 'Masquer';
-    });
-  });
-
-const form = $("#form");
-  if (form) form.addEventListener("submit", saveConfig);
-
-const fwForm = $("#fwForm");
-if (fwForm) {
-  fwForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const fileInput = $("#fwFile");
-    const btn = $("#fwBtn");
-    if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
-      fwMsg("Sélectionnez un fichier .bin.");
-      return;
-    }
-
-    const file = fileInput.files[0];
-    const fd = new FormData();
-    fd.append("update", file, file.name);
-
-    if (btn) btn.disabled = true;
-    fwMsg("Upload en cours...");
-    try {
-      const res = await fetch("/api/update", { method: "POST", body: fd });
-      let ok = res.ok;
-      let text = "Mise à jour terminée. Redémarrage…";
-      try {
-        const json = await res.json();
-        ok = !!json.ok;
-        if (!ok && json.err) text = json.err;
-      } catch (_) {
-        if (!ok) text = "Mise à jour échouée.";
-      }
-      fwMsg(text);
-    } catch (err) {
-      fwMsg("Erreur réseau pendant l’upload.");
-    } finally {
-      if (btn) btn.disabled = false;
-    }
-  });
-}
-
-  const btnReboot = $("#btnReboot");
-  if (btnReboot) {
-    btnReboot.addEventListener("click", async ()=>{
-      msg("Redémarrage…");
-      try { await fetch("/api/reboot", {method:"POST"}); } catch(_) {}
-      setTimeout(()=>location.reload(), 7000);
-    });
-  }
-
-  const selConnectMode = $("#useConnectMode");
-  const selSondeMode = $("#useSondeMode");
-  const selZoneMode1 = $("#useZoneMode1");
-  const selZoneMode2 = $("#useZoneMode2");
-  const selZoneMode3 = $("#useZoneMode3");
-
-  if (selConnectMode) selConnectMode.addEventListener("change", updatePairButtons);
-  if (selSondeMode) selSondeMode.addEventListener("change", updatePairButtons);
-  if (selZoneMode1) selZoneMode1.addEventListener("change", updatePairButtons);
-  if (selZoneMode2) selZoneMode2.addEventListener("change", updatePairButtons);
-  if (selZoneMode3) selZoneMode3.addEventListener("change", updatePairButtons);
-  const btnPairConnect = $("#btnPairConnect");
-  const btnPairSonde   = $("#btnPairSondeExt");
-  const btnPairSatZ1   = $("#btnPairSatZ1");
-  const btnPairSatZ2   = $("#btnPairSatZ2");
-  const btnPairSatZ3   = $("#btnPairSatZ3");
-  const btnRecupNetworkId = $("#btnRecupNetworkID");
-
-  if (btnPairConnect) btnPairConnect.addEventListener("click", pairConnect);
-  if (btnPairSonde)   btnPairSonde.addEventListener("click", pairSondeExt);
-  if (btnPairSatZ1)   btnPairSatZ1.addEventListener("click", ()=>pairSatellite("1"));
-  if (btnPairSatZ2)   btnPairSatZ2.addEventListener("click", ()=>pairSatellite("2"));
-  if (btnPairSatZ3)   btnPairSatZ3.addEventListener("click", ()=>pairSatellite("3"));
-  if (btnRecupNetworkId) btnRecupNetworkId.addEventListener("click", recupNetworkId);
-
-  // Attach change listener for the wifi static checkbox to update static inputs
-  const chkStatic = $("#wifiStatic");
-  if (chkStatic) chkStatic.addEventListener('change', updateStaticInputs);
-
-  // Handle page show (bfcache/back navigation) to restore UI state
-  window.addEventListener('pageshow', ()=>{ updateStaticInputs(); updatePairButtons(); });
-
-  loadConfig();
-  const scheduleStatusRefresh = async () => {
-    await loadStatus();
-    setTimeout(scheduleStatusRefresh, 5000);
-  };
-  scheduleStatusRefresh();
-});
-</script>
-
-</body></html>
-)HTML";
+  String page(FPSTR(WebAssets::INDEX_HTML));
   page.replace("{{OPENFRISQUETVISIO_VERSION}}", OPENFRISQUETVISIO_VERSION);
   return page;
 }
 
+String Portal::settingsHtml() {
+  String page(FPSTR(WebAssets::SETTINGS_HTML));
+  page.replace("{{OPENFRISQUETVISIO_VERSION}}", OPENFRISQUETVISIO_VERSION);
+  return page;
+}
 
+String Portal::programmationHtml() {
+  String page(FPSTR(WebAssets::PROGRAMMING_HTML));
+  page.replace("{{OPENFRISQUETVISIO_VERSION}}", OPENFRISQUETVISIO_VERSION);
+  return page;
+}
 
 String Portal::logsHtml() {
-  return R"HTML(
-<!DOCTYPE html><html lang='fr'><head>
-<meta charset='utf-8'>
-<meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>OpenFrisquetVisio – Logs</title>
-<style>
-  :root{
-    --bg:#0f1115;--card:#171a21;--muted:#8a8f98;--txt:#e7e9ee;
-    --acc:#3aa3ff;--bd:#2a2f39;--ok:#1fb86a;--warn:#ffb020
-  }
-  *,*:before,*:after{box-sizing:border-box}
-  body{
-    margin:0;padding:24px;background:var(--bg);color:var(--txt);
-    font:15px/1.45 system-ui,Segoe UI,Roboto,Arial
-  }
-  a{color:var(--acc);text-decoration:none}
-  h1,h2{margin:0 0 12px}
-  .wrap{max-width:980px;margin:0 auto;display:grid;gap:16px}
-  .card{
-    background:var(--card);border:1px solid var(--bd);border-radius:12px;
-    padding:18px;box-shadow:0 4px 16px rgba(0,0,0,.2)
-  }
-  .toolbar{
-    display:flex;flex-wrap:wrap;gap:10px;align-items:center;
-    margin:8px 0 12px
-  }
-  .badge{
-    display:inline-flex;align-items:center;gap:6px;
-    padding:6px 10px;border-radius:999px;border:1px solid var(--bd);
-    background:#10131a;font-size:13px
-  }
-  .btn{
-    display:inline-flex;align-items:center;gap:8px;
-    border:1px solid var(--bd);background:#0d1016;color:var(--txt);
-    padding:10px 14px;border-radius:10px;cursor:pointer;
-    text-decoration:none
-  }
-  .btn.primary{
-    background:var(--acc);color:#061019;border-color:transparent;
-    font-weight:700
-  }
-  label{
-    color:var(--muted);font-weight:600;font-size:13px;
-    display:flex;align-items:center;gap:6px
-  }
-  select,input[type=text],input[type=checkbox]{
-    padding:8px 10px;border:1px solid var(--bd);border-radius:10px;
-    background:#0d1016;color:var(--txt)
-  }
-  pre{
-    white-space:pre-wrap;background:#0b0e13;color:#e6e6e6;
-    padding:12px;border-radius:10px;max-height:70vh;overflow:auto;
-    margin:0;font-family:ui-monospace,Menlo,Consolas,monospace
-  }
-  .muted{color:var(--muted)}
-  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  .topnav{display:flex;align-items:center;gap:10px;margin-bottom:4px}
-  @media (max-width:820px){.toolbar{gap:8px}}
-  .check-row{
-    display:flex;
-    align-items:center;
-    gap:8px;
-    font-weight:600;
-  }
-  input[type=checkbox]{
-    width:auto;
-    accent-color:var(--acc);
-  }
-</style>
-</head><body>
-<div class='wrap'>
-
-  <div class='topnav'>
-    <a href='/' class='btn'>&larr;&nbsp;Retour</a>
-    <span class='badge'>OpenFrisquetVisio – Logs</span>
-  </div>
-
-  <div class='card'>
-    <div class='toolbar'>
-      <label>Rafraîchissement
-        <select id='refresh'>
-          <option value='0'>Off</option>
-          <option value='1000'>1s</option>
-          <option value='2000' selected>2s</option>
-          <option value='5000'>5s</option>
-          <option value='10000'>10s</option>
-        </select>
-      </label>
-
-      <label>Niveau
-        <select id='level'>
-          <option value=''>Tous</option>
-          <option value='INFO'>INFO</option>
-          <option value='DEBUG'>DEBUG</option>
-          <option value='WARN'>WARN</option>
-          <option value='ERROR'>ERROR</option>
-        </select>
-      </label>
-
-      <label>Filtre
-        <input id='filter' type='text' placeholder='rechercher...'>
-      </label>
-
-      <label>Lignes
-        <select id='limit'>
-          <option value='0' selected>Toutes</option>
-          <option value='200'>200</option>
-          <option value='500'>500</option>
-        </select>
-      </label>
-
-      <label>
-        <input id='autoscroll' type='checkbox' checked>
-        Auto-scroll
-      </label>
-
-      <button id='btnReload' class='btn'>Recharger</button>
-      <button id='btnClear' class='btn'>Effacer</button>
-    </div>
-
-    <pre id='log'>(chargement...)</pre>
-  </div>
-
-  <div class='muted' style='text-align:center'>
-    Astuce : filtre par niveau (p. ex. <code>ERROR</code>) et limite pour ne voir que la fin du journal.
-  </div>
-
-</div>
-
-<script>
-const $ = s => document.querySelector(s);
-let raw = "";
-let timer = null;
-let pollInFlight = false;
-let pollStopped = false;
-
-const elLog     = $("#log");
-const selRef    = $("#refresh");
-const selLvl    = $("#level");
-const selLimit  = $("#limit");
-const inpFilter = $("#filter");
-const cbAuto    = $("#autoscroll");
-const btnReload = $("#btnReload");
-const btnClear  = $("#btnClear");
-
-function applyFilters(txt){
-  if(!txt) return "";
-  let lines = txt.split("\n");
-
-  const lvl = selLvl.value.trim();
-  const f   = inpFilter.value.trim().toLowerCase();
-
-  if(lvl){
-    lines = lines.filter(l => l.includes(lvl));
-  }
-  if(f){
-    lines = lines.filter(l => l.toLowerCase().includes(f));
-  }
-
-  const lim = parseInt(selLimit.value||"0",10);
-  if(lim>0 && lines.length>lim){
-    lines = lines.slice(-lim);
-  }
-
-  return lines.join("\n");
+  return String(FPSTR(WebAssets::LOGS_HTML));
 }
-
-function render(){
-  const out = applyFilters(raw);
-  elLog.textContent = out || "(vide)";
-  if(cbAuto.checked){
-    elLog.scrollTop = elLog.scrollHeight;
-  }
-}
-
-async function reload(){
-  if(pollInFlight || pollStopped) return;
-  pollInFlight = true;
-  try{
-    // On envoie la limite et éventuellement le niveau au backend
-    const limitParam = selLimit.value === "0" ? "500" : selLimit.value;
-    const lvl = selLvl.value.trim();
-    const qs =
-      "?limit=" + encodeURIComponent(limitParam) +
-      (lvl ? "&level="+encodeURIComponent(lvl) : "") +
-      "&_=" + Date.now();
-
-    const r = await fetch("/api/logs"+qs,{cache:"no-store"});
-    const arr = await r.json();   // ["ligne1", "ligne2", ...]
-    raw = arr.join("\n");
-    render();
-  }catch(e){
-    elLog.textContent = "Erreur chargement logs: " + e;
-  } finally {
-    pollInFlight = false;
-  }
-}
-
-function stopPolling(){
-  pollStopped = true;
-  if(timer){ clearTimeout(timer); timer = null; }
-}
-
-function startPolling(){
-  pollStopped = false;
-  scheduleNextPoll();
-}
-
-function scheduleNextPoll(){
-  if(pollStopped) return;
-  const v = parseInt(selRef.value||"0",10);
-  if(v>0){
-    if(timer){ clearTimeout(timer); timer = null; }
-    timer = setTimeout(async ()=>{
-      await reload();
-      scheduleNextPoll();
-    }, v);
-  }
-}
-
-function updateRefreshTimer(){
-  stopPolling();
-  const v = parseInt(selRef.value||"0",10);
-  if(v>0){
-    startPolling();
-  }
-}
-
-document.addEventListener("DOMContentLoaded", ()=>{
-  btnReload.addEventListener("click", reload);
-  btnClear.addEventListener("click", async ()=>{
-    try{
-      await fetch("/api/logs/clear",{method:"POST"});
-      raw = "";
-      render();
-    }catch(e){
-      console.error("Erreur clear logs", e);
-    }
-  });
-
-  [selLvl, inpFilter, selLimit].forEach(el=>{
-    el.addEventListener("input", render);
-  });
-
-  selRef.addEventListener("change", updateRefreshTimer);
-
-  reload().then(updateRefreshTimer);
-});
-</script>
-
-</body></html>
-)HTML";
-}
-
 
 String Portal::memoryHtml() {
-  return R"HTML(
-<!DOCTYPE html><html lang='fr'><head>
-<meta charset='utf-8'>
-<meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>OpenFrisquetVisio – Mémoire chaudière</title>
-<style>
-  :root{
-    --bg:#0f1115;--card:#171a21;--muted:#8a8f98;--txt:#e7e9ee;
-    --acc:#3aa3ff;--bd:#2a2f39;--ok:#1fb86a;--warn:#ffb020
-  }
-  *,*:before,*:after{box-sizing:border-box}
-  body{
-    margin:0;padding:24px;background:var(--bg);color:var(--txt);
-    font:15px/1.45 system-ui,Segoe UI,Roboto,Arial
-  }
-  a{color:var(--acc);text-decoration:none}
-  h1,h2{margin:0 0 12px}
-  .wrap{max-width:980px;margin:0 auto;display:grid;gap:16px}
-  .card{
-    background:var(--card);border:1px solid var(--bd);border-radius:12px;
-    padding:18px;box-shadow:0 4px 16px rgba(0,0,0,.2)
-  }
-  .toolbar{
-    display:flex;flex-wrap:wrap;gap:10px;align-items:center;
-    margin:8px 0 12px
-  }
-  .badge{
-    display:inline-flex;align-items:center;gap:6px;
-    padding:6px 10px;border-radius:999px;border:1px solid var(--bd);
-    background:#10131a;font-size:13px
-  }
-  .btn{
-    display:inline-flex;align-items:center;gap:8px;
-    border:1px solid var(--bd);background:#0d1016;color:var(--txt);
-    padding:10px 14px;border-radius:10px;cursor:pointer;
-    text-decoration:none
-  }
-  .btn.primary{
-    background:var(--acc);color:#061019;border-color:transparent;
-    font-weight:700
-  }
-  label{
-    color:var(--muted);font-weight:600;font-size:13px;
-    display:flex;align-items:center;gap:6px
-  }
-  input[type=text],input[type=number],select{
-    padding:8px 10px;border:1px solid var(--bd);border-radius:10px;
-    background:#0d1016;color:var(--txt)
-  }
-  pre{
-    white-space:pre;background:#0b0e13;color:#e6e6e6;
-    padding:12px;border-radius:10px;max-height:70vh;overflow:auto;
-    margin:0;font-family:ui-monospace,Menlo,Consolas,monospace
-  }
-  .muted{color:var(--muted)}
-  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  .topnav{display:flex;align-items:center;gap:10px;margin-bottom:4px}
-  .msg{
-    margin-top:10px;padding:10px 12px;border-radius:10px;
-    background:#0b0e13;border:1px solid var(--bd);display:none
-  }
-  .msg.show{display:block}
-  .msg.ok{border-color:var(--ok);color:var(--ok)}
-  .msg.err{border-color:#ff5a5a;color:#ff8a8a}
-</style>
-</head><body>
-<div class='wrap'>
-
-  <div class='topnav'>
-    <a href='/' class='btn'>&larr;&nbsp;Retour</a>
-    <span class='badge'>OpenFrisquetVisio – Mémoire chaudière</span>
-  </div>
-
-  <div class='card'>
-    <div class='toolbar'>
-      <label>Adresse (hex)
-        <input id='start' type='text' value='0000' size='6'>
-      </label>
-      <label>Longueur (mots 16-bit)
-        <input id='len' type='number' min='1' max='256' value='64'>
-      </label>
-      <label>Scan max
-        <input id='scanMax' type='number' min='1' max='512' value='128'>
-      </label>
-      <label>Scan pas
-        <input id='scanStep' type='number' min='1' max='256' value='1'>
-      </label>
-      <label>
-        <input id='auto' type='checkbox'>
-        Auto +len
-      </label>
-      <label>
-        <input id='scanStop' type='checkbox' checked>
-        Stop à la 1re zone valide
-      </label>
-      <label>
-        <input id='scanAuto' type='checkbox' checked>
-        Auto +scan
-      </label>
-      <label>Intervalle
-        <select id='refresh'>
-          <option value='0'>Off</option>
-          <option value='500'>500 ms</option>
-          <option value='1000'>1s</option>
-          <option value='2000'>2s</option>
-          <option value='5000'>5s</option>
-        </select>
-      </label>
-      <button class='btn primary' id='btnRead'>Lire</button>
-      <button class='btn' id='btnScan'>Scanner</button>
-      <button class='btn' id='btnStop'>Stop</button>
-    </div>
-    <div class='row muted'>
-      Utilise l'association Connect pour interroger la mémoire chaudière.
-    </div>
-    <pre id='dump'>(aucune donnée)</pre>
-    <div id='msg' class='msg'></div>
-  </div>
-
-</div>
-
-<script>
-const $ = s => document.querySelector(s);
-const dump = $("#dump");
-const msg = $("#msg");
-const inpStart = $("#start");
-const inpLen = $("#len");
-const inpScanMax = $("#scanMax");
-const inpScanStep = $("#scanStep");
-const cbScanStop = $("#scanStop");
-const cbScanAuto = $("#scanAuto");
-const cbAuto = $("#auto");
-const selRef = $("#refresh");
-const btnRead = $("#btnRead");
-const btnScan = $("#btnScan");
-const btnStop = $("#btnStop");
-let timer = null;
-let pollInFlight = false;
-let pollStopped = false;
-
-function toHex(n, w){
-  return n.toString(16).toUpperCase().padStart(w, "0");
+  return String(FPSTR(WebAssets::MEMORY_HTML));
 }
-
-function showMsg(text, ok){
-  if(!msg) return;
-  msg.textContent = text;
-  msg.className = "msg show " + (ok ? "ok" : "err");
-}
-
-function renderDump(startHex, words){
-  if(!words || !words.length){
-    dump.textContent = "(aucune donnée)";
-    return;
-  }
-  const start = parseInt(startHex, 16) || 0;
-  const lines = [];
-  for(let i=0; i<words.length; i+=8){
-    const addr = start + i;
-    const chunk = words.slice(i, i+8).map(w => w === "??" ? "??" : w);
-    lines.push(toHex(addr,4) + ": " + chunk.join(" "));
-  }
-  dump.textContent = lines.join("\n");
-}
-
-async function readOnce(){
-  if(pollInFlight || pollStopped) return;
-  pollInFlight = true;
-  const start = (inpStart.value || "0000").trim();
-  const len = parseInt(inpLen.value || "16", 10);
-  const qs = "?start=" + encodeURIComponent(start) +
-             "&len=" + encodeURIComponent(len) +
-             "&_=" + Date.now();
-  try{
-    const r = await fetch("/api/memory" + qs, { cache:"no-store" });
-    const j = await r.json();
-    if(!j.ok){
-      showMsg(j.err || "Erreur lecture", false);
-      return;
-    }
-    renderDump(j.startHex || start, j.words || []);
-    if(j.errors && j.errors.length){
-      showMsg("Lecture partielle: " + j.errors.length + " erreurs.", false);
-    } else {
-      showMsg("Lecture OK (" + (j.words ? j.words.length : 0) + " mots).", true);
-    }
-    if(cbAuto.checked && j.startHex && j.words){
-      const next = (parseInt(j.startHex,16) + j.words.length) & 0xFFFF;
-      inpStart.value = toHex(next, 4);
-    }
-  }catch(e){
-    showMsg("Erreur réseau: " + e, false);
-  } finally {
-    pollInFlight = false;
-  }
-}
-
-async function scanOnce(){
-  const start = (inpStart.value || "0000").trim();
-  const max = parseInt(inpScanMax.value || "128", 10);
-  const step = parseInt(inpScanStep.value || "1", 10);
-  const stopOnValid = cbScanStop.checked ? "true" : "false";
-  const qs = "?start=" + encodeURIComponent(start) +
-             "&max=" + encodeURIComponent(max) +
-             "&step=" + encodeURIComponent(step) +
-             "&stopOnValid=" + encodeURIComponent(stopOnValid) +
-             "&_=" + Date.now();
-  try{
-    const r = await fetch("/api/memory/scan" + qs, { cache:"no-store" });
-    const j = await r.json();
-    if(!j.ok){
-      showMsg(j.err || "Erreur scan", false);
-      return;
-    }
-    if(j.found){
-      showMsg("Zone valide: " + j.addr + " = " + j.value + " (scan " + j.scanned + ")", true);
-      inpStart.value = j.addr;
-      readOnce();
-    } else {
-      showMsg("Aucune zone valide (scan " + j.scanned + ")", false);
-    }
-    if(cbScanAuto.checked && !j.found){
-      const base = parseInt(start, 16) || 0;
-      const next = (base + (j.scanned * step)) & 0xFFFF;
-      inpStart.value = toHex(next, 4);
-    }
-  }catch(e){
-    showMsg("Erreur réseau: " + e, false);
-  }
-}
-
-function stopPolling(){
-  pollStopped = true;
-  if(timer){ clearTimeout(timer); timer = null; }
-}
-
-function startPolling(){
-  pollStopped = false;
-  scheduleNextPoll();
-}
-
-function scheduleNextPoll(){
-  if(pollStopped) return;
-  const v = parseInt(selRef.value || "0", 10);
-  if(v > 0){
-    if(timer){ clearTimeout(timer); timer = null; }
-    timer = setTimeout(async ()=>{
-      await readOnce();
-      scheduleNextPoll();
-    }, v);
-  }
-}
-
-function updateTimer(){
-  stopPolling();
-  const v = parseInt(selRef.value || "0", 10);
-  if(v > 0){
-    startPolling();
-  }
-}
-
-btnRead.addEventListener("click", readOnce);
-btnScan.addEventListener("click", scanOnce);
-btnStop.addEventListener("click", ()=>{
-  selRef.value = "0";
-  updateTimer();
-});
-selRef.addEventListener("change", updateTimer);
-</script>
-
-</body></html>
-)HTML";
-}
-
 
 String Portal::logsRadioHtml() {
-  return R"HTML(
-<!DOCTYPE html><html lang='fr'><head>
-<meta charset='utf-8'>
-<meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>OpenFrisquetVisio – Trames radio</title>
-<style>
-  :root{
-    --bg:#0f1115;--card:#171a21;--muted:#8a8f98;--txt:#e7e9ee;
-    --acc:#3aa3ff;--bd:#2a2f39;--ok:#1fb86a;--warn:#ffb020
-  }
-  *,*:before,*:after{box-sizing:border-box}
-  body{
-    margin:0;padding:24px;background:var(--bg);color:var(--txt);
-    font:15px/1.45 system-ui,Segoe UI,Roboto,Arial
-  }
-  a{color:var(--acc);text-decoration:none}
-  h1,h2{margin:0 0 12px}
-  .wrap{max-width:1280px;margin:0 auto;display:grid;gap:16px}
-  .card{
-    background:var(--card);border:1px solid var(--bd);border-radius:12px;
-    padding:18px;box-shadow:0 4px 16px rgba(0,0,0,.2)
-  }
-  .toolbar{
-    display:flex;flex-wrap:wrap;gap:10px;align-items:center;
-    margin:8px 0 12px
-  }
-  .badge{
-    display:inline-flex;align-items:center;gap:6px;
-    padding:6px 10px;border-radius:999px;border:1px solid var(--bd);
-    background:#10131a;font-size:13px
-  }
-  .btn{
-    display:inline-flex;align-items:center;gap:8px;
-    border:1px solid var(--bd);background:#0d1016;color:var(--txt);
-    padding:10px 14px;border-radius:10px;cursor:pointer;
-    text-decoration:none
-  }
-  .btn.primary{
-    background:var(--acc);color:#061019;border-color:transparent;
-    font-weight:700
-  }
-  label{
-    color:var(--muted);font-weight:600;font-size:13px;
-    display:flex;align-items:center;gap:6px
-  }
-  select,input[type=text],input[type=checkbox]{
-    padding:8px 10px;border:1px solid var(--bd);border-radius:10px;
-    background:#0d1016;color:var(--txt)
-  }
-  #payload {
-    width:100%;
-  }
-  pre{
-    font-size:80%;
-    white-space:pre-wrap;background:#0b0e13;color:#e6e6e6;
-    padding:12px;border-radius:10px;max-height:60vh;overflow:auto;
-    margin:0;font-family:ui-monospace,Menlo,Consolas,monospace
-  }
-  .muted{color:var(--muted)}
-  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  .topnav{display:flex;align-items:center;gap:10px;margin-bottom:4px}
-  .msg{
-    margin-top:8px;padding:8px 10px;border-radius:8px;
-    background:#111827;color:#e5e7eb;display:none;font-size:13px
-  }
-  .msg.show{display:block}
-  .msg.err{border:1px solid #b91c1c}
-  .msg.ok{border:1px solid #15803d}
-  @media (max-width:820px){.toolbar{gap:8px}}
-</style>
-</head><body>
-<div class='wrap'>
-
-  <div class='topnav'>
-    <a href='/' class='btn'>&larr;&nbsp;Retour</a>
-    <span class='badge'>OpenFrisquetVisio – Trames radio</span>
-    <a href='/logs' class='btn'>Tous les logs</a>
-  </div>
-
-  <div class='card'>
-    <h2>Trames radio (niveau RADIO)</h2>
-    <div class='toolbar'>
-      <label>Rafraîchissement
-        <select id='refresh'>
-          <option value='0'>Off</option>
-          <option value='1000'>1s</option>
-          <option value='2000' selected>2s</option>
-          <option value='5000'>5s</option>
-          <option value='10000'>10s</option>
-        </select>
-      </label>
-
-      <label>Filtre texte
-        <input id='filter' type='text' placeholder='rechercher...'>
-      </label>
-
-      <label>Lignes
-        <select id='limit'>
-          <option value='0' selected>Toutes</option>
-          <option value='200'>200</option>
-          <option value='500'>500</option>
-        </select>
-      </label>
-
-      <label>
-        <input id='autoscroll' type='checkbox' checked>
-        Auto-scroll
-      </label>
-
-      <button id='btnReload' class='btn'>Recharger</button>
-      <button id='btnClear' class='btn'>Effacer</button>
-    </div>
-
-    <pre id='log'>(chargement...)</pre>
-  </div>
-
-  <div class='card'>
-    <h2>Envoyer une trame radio</h2>
-    <div class='row'>
-      <label for='payload'>Payload hexadécimal</label>
-      <input id='payload' type='text' placeholder='ex: A5 01 02 0F 3C'>
-    </div>
-    <div class='hint muted' style='margin-top:4px'>
-      Format : uniquement 0-9, A-F, a-f et espaces. Les espaces sont ignorés.
-    </div>
-    <div class='row' style='margin-top:10px'>
-      <button id='btnSend' class='btn primary'>Envoyer</button>
-    </div>
-    <div id='msg' class='msg'></div>
-  </div>
-
-  <div class='muted' style='text-align:center'>
-    Cette page affiche uniquement les logs avec le niveau <code>RADIO</code>
-    (filtrés côté backend via <code>level=RADIO</code>).
-  </div>
-
-</div>
-
-<script>
-const $ = s => document.querySelector(s);
-let raw = "";
-let timer = null;
-
-const elLog     = $("#log");
-const selRef    = $("#refresh");
-const selLimit  = $("#limit");
-const inpFilter = $("#filter");
-const cbAuto    = $("#autoscroll");
-const btnReload = $("#btnReload");
-const btnClear  = $("#btnClear");
-
-const inpPayload = $("#payload");
-const btnSend    = $("#btnSend");
-const msgBox     = $("#msg");
-
-let pollInFlight = false;
-let pollStopped = false;
-
-function showMsg(text, ok){
-  if(!msgBox) return;
-  msgBox.textContent = text;
-  msgBox.className = "msg show " + (ok ? "ok" : "err");
-}
-
-function applyFilters(txt){
-  if(!txt) return "";
-  let lines = txt.split("\n");
-
-  const f   = inpFilter.value.trim().toLowerCase();
-  if(f){
-    lines = lines.filter(l => l.toLowerCase().includes(f));
-  }
-
-  const lim = parseInt(selLimit.value||"0",10);
-  if(lim>0 && lines.length>lim){
-    lines = lines.slice(-lim);
-  }
-
-  return lines.join("\n");
-}
-
-function render(){
-  const out = applyFilters(raw);
-  elLog.textContent = out || "(vide)";
-  if(cbAuto.checked){
-    elLog.scrollTop = elLog.scrollHeight;
-  }
-}
-
-async function reload(){
-  if(pollInFlight || pollStopped) return;
-  pollInFlight = true;
-  try{
-    const limitParam = selLimit.value === "0" ? "500" : selLimit.value;
-    const qs =
-      "?limit=" + encodeURIComponent(limitParam) +
-      "&level=RADIO&_=" + Date.now();
-
-    const r = await fetch("/api/logs"+qs,{cache:"no-store"});
-    const arr = await r.json();   // ["ligne1", "ligne2", ...]
-    raw = arr.join("\n");
-    render();
-  }catch(e){
-    elLog.textContent = "Erreur chargement logs: " + e;
-  } finally {
-    pollInFlight = false;
-  }
-}
-
-function stopPolling(){
-  pollStopped = true;
-  if(timer){ clearTimeout(timer); timer = null; }
-}
-
-function startPolling(){
-  pollStopped = false;
-  scheduleNextPoll();
-}
-
-function scheduleNextPoll(){
-  if(pollStopped) return;
-  const v = parseInt(selRef.value||"0",10);
-  if(v>0){
-    if(timer){ clearTimeout(timer); timer = null; }
-    timer = setTimeout(async ()=>{
-      await reload();
-      scheduleNextPoll();
-    }, v);
-  }
-}
-
-function updateRefreshTimer(){
-  stopPolling();
-  const v = parseInt(selRef.value||"0",10);
-  if(v>0){
-    startPolling();
-  }
-}
-
-async function sendPayload(){
-  const hex = (inpPayload.value || "").trim();
-  if(!hex){
-    showMsg("Payload vide.", false);
-    return;
-  }
-
-  // petite validation côté front
-  if(!/^[0-9a-fA-F ]+$/.test(hex)){
-    showMsg("Payload invalide : utilisez uniquement 0-9, A-F et espaces.", false);
-    return;
-  }
-
-  try{
-    const fd = new FormData();
-    fd.append("payload", hex);
-
-    const r = await fetch("/api/radio/send", {
-      method:"POST",
-      body: fd
-    });
-
-    const txt = await r.text();
-    try {
-      const j = JSON.parse(txt);
-      if(j.ok){
-        showMsg("Trame envoyée (voir logs RADIO).", true);
-        // éventuellement on recharge les logs
-        reload();
-      } else {
-        showMsg("Erreur envoi trame : " + (j.err || "inconnue"), false);
-      }
-    } catch(_){
-      showMsg("Réponse inattendue du serveur: " + txt, false);
-    }
-  }catch(e){
-    showMsg("Erreur réseau lors de l'envoi: " + e, false);
-  }
-}
-
-document.addEventListener("DOMContentLoaded", ()=>{
-  btnReload.addEventListener("click", reload);
-  btnClear.addEventListener("click", async ()=>{
-    try{
-      await fetch("/api/logs/clear",{method:"POST"});
-      raw = "";
-      render();
-      showMsg("Logs effacés.", true);
-    }catch(e){
-      console.error("Erreur clear logs", e);
-      showMsg("Erreur lors de l'effacement des logs.", false);
-    }
-  });
-
-  [inpFilter, selLimit].forEach(el=>{
-    el.addEventListener("input", render);
-  });
-
-  selRef.addEventListener("change", updateRefreshTimer);
-
-  if(btnSend){
-    btnSend.addEventListener("click", sendPayload);
-  }
-
-  reload().then(updateRefreshTimer);
-});
-</script>
-
-</body></html>
-)HTML";
+  return String(FPSTR(WebAssets::RADIO_LOGS_HTML));
 }
 
 bool Portal::hexStringToBufferRaw(const String& hex, uint8_t* buffer, size_t maxLen, size_t& outLen) {

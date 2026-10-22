@@ -5,6 +5,7 @@
 #include "../Logs.h"
 #include "Zone.h"
 #include "Chaudiere.h"
+#include "RadioSchedule.h"
 
 class Connect : public FrisquetDevice {
     
@@ -87,5 +88,9 @@ class Connect : public FrisquetDevice {
         uint32_t _lastRecuperationModeECS = 0;
         uint32_t _lastRecuperationConsommation = 0;
         uint32_t _lastEnvoiZone = 0;
+        RadioSchedule _temperatureSchedules[3];
+        RadioSchedule _consommationSchedule;
+        RadioSchedule _ecsSchedule;
+        bool _initialReadPending = true;
         uint8_t _modeECSFrameBits = 0x01;
 };

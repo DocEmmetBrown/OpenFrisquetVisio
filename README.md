@@ -45,13 +45,34 @@ Deux modes possibles :
   - Sélecteurs de modes
   - Commandes de consigne et interrupteurs (Boost, associations, etc.)
 - Entités disponibles immédiatement dans Home Assistant
+- **État chaudière** regroupe l'activité : Chauffage, Chauffage ECS ou Veille (Inconnu si les données manquent). Cet état utilise uniquement les indicateurs de fonctionnement et le mode reçus par radio. **Anomalie chaudière** reste un capteur binaire indépendant ; une anomalie ne remplace plus l'activité affichée. L'ancien capteur « Mode de fonctionnement » est retiré de la découverte MQTT. Adapter les automatisations qui utilisaient ce capteur ou l'état « Fonctionnement ».
+
+- Le thermostat propose **Auto**, **Dérogation Confort**, **Dérogation Réduit**, **Confort**, **Réduit**, **Hors Gel** et **Boost**. Auto et ses dérogations sont affichés en mode HVAC `auto` ; les régimes permanents et Boost en `heat`. Hors Gel conserve la protection et ne correspond pas à un arrêt.
+- Le capteur **Mode actif** conserve le détail du mode, y compris en écoute seule. Le capteur **Régime actif** indique Confort, Réduit ou Hors Gel. Boost applique une seule fois le supplément configuré à la consigne Confort, dans la limite de 30 °C. Modifier la consigne du thermostat ajuste le profil actif ; en Boost, la consigne affichée inclut déjà le supplément.
+- Pour un satellite physique, sans Connect actif ni écrasement radio activé, le thermostat reste en lecture seule. Pour un satellite physique ou le Connect, un mode demandé est publié après retour radio ou réponse réussie ; le satellite virtuel publie son état local.
+- Avec un satellite virtuel, définir le programme depuis **Programmation** (`/programming`). Auto nécessite un programme connu et l'heure chaudière synchronisée. Les dérogations locales prennent fin au prochain changement Confort/Réduit ; un programme constant ne permet pas de dérogation temporaire. Leur échéance est conservée au redémarrage. Choisir Auto ou modifier le programme local annule la dérogation. Avec le Connect, la gestion du programme et de la fin de dérogation reste confiée au système distant.
+- Les topics `zN/mode/set` acceptent les commandes `Confort` et `Réduit`, ainsi que les anciens noms `Confort permanent` et `Réduit permanent` pour compatibilité. Les états publiés utilisent les libellés `Confort` et `Réduit`.
 
 ### 🌐 Portail Web intégré
 - Configuration du **WiFi** et du **MQTT**
+- **Programmation hebdomadaire** : créneaux Confort/Réduit de 30 minutes, copie de journées et sauvegarde persistante pour les zones pilotées par un Connect actif ou un satellite virtuel. Accessible depuis le tableau de bord ou `/programming`.
 - Visualisation des **logs**
 - Informations système et réseau
 - Envoi de trame radio personnalisée (debug)
 - Lecture de zones mémoire (debug)
+
+Les pages du portail se trouvent dans le dossier **`web/`**. Lors d'une compilation
+PlatformIO, `tools/generate_web_assets.py` les transforme automatiquement en
+ressources C++ stockées dans le firmware.
+
+La programmation est envoyée avec le bloc complet de configuration de la zone au
+prochain cycle du Connect. Son utilisation nécessite le mode Auto ; enregistrer
+la semaine ne change pas le mode de chauffage. Les zones en écoute passive ou
+pilotées par un satellite virtuel sont affichées en lecture seule.
+
+Les tests du codage des demi-heures et de la sauvegarde se lancent avec
+`node --test tests/programming.test.mjs` et
+`python3 tests/test_programming_state.py` (compilateur C++ requis).
 
 ### 🔁 Mise à jour OTA
 - Mise à jour du firmware directement via WiFi
@@ -86,7 +107,7 @@ Avant le flash :
 ### 2️⃣ Flash du firmware
 
 - Connecter la carte **Heltec ESP32** via **USB**  
-- Compiler et téléverser avec **PlatformIO** ou **Arduino IDE**
+- Compiler et téléverser avec **PlatformIO**
 - Au premier démarrage, le module crée un **point d’accès WiFi**
 
 ---
@@ -95,12 +116,21 @@ Avant le flash :
 
 1. Se connecter au WiFi créé : `OpenFrisquetVisio-Setup`, mot de passe `frisquetconfig`
 2. Ouvrir un navigateur sur `192.168.4.1`
-3. Renseigner :
+3. Saisir le mot de passe du portail : `admin` par défaut, sans identifiant
+4. Renseigner :
    - Vos **informations WiFi**
    - Vos **informations MQTT**
    - Vos **Les modules à utiliser**
    - **Mode passif Connect** si une box Connect est déjà présente
-4. Sauvegarder → le module redémarre automatiquement
+5. Sauvegarder → le module redémarre automatiquement
+
+Le mot de passe du portail se modifie dans **Paramètres → Système → Accès au portail**.
+Renseigner le nouveau mot de passe et sa confirmation, puis enregistrer.
+Laisser les deux champs vides conserve le mot de passe actuel. Il est sauvegardé
+sur l’appareil et conservé après redémarrage. Les pages et les API du portail
+nécessitent une connexion ; les sessions expirent après 12 heures ou au
+redémarrage, et un changement de mot de passe déconnecte toutes les sessions.
+Le bouton **Se déconnecter** se trouve dans la même section.
 
 ---
 
@@ -178,4 +208,4 @@ Mais bon, si ça marche, vous pouvez toujours m’offrir un café ☕ 😉
 **Année :** 2025  
 **Plateforme :** ESP32 (Heltec WiFi LoRa 32, SX1262)  
 **Compatibilité :** Home Assistant, MQTT, Frisquet Chaudière série Eco Radio Visio  
-**Version :** 26.08.14.1757
+**Version :** 26.10.22.1250

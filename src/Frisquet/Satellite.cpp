@@ -47,7 +47,7 @@ void Satellite::begin(bool modeVirtuel) {
 
 void Satellite::loop() {
     
-    static bool firstLoop = true;
+    bool& firstLoop = _initialReadPending;
     const bool cdcGereeParConnect = getConfig().useConnect();
     if(firstLoop && !_modeVirtuel) {
         firstLoop = false;
@@ -62,18 +62,25 @@ void Satellite::loop() {
     }
 
     if(firstLoop) {
+        firstLoop = false;
         recupererInfosChaudiere();
         if (this->getId() == ID_ZONE_1 && !cdcGereeParConnect) {
             if (recupererTemperatureCDC()) {
-                _lastRecuperationTemperatureCDC = now;
+                _lastRecuperationTemperatureCDC = millis();
+            } else {
+                error("[SATELLITE Z%d] Échec de la récupération initiale de la température CDC.", getNumeroZone());
             }
+            _cdcSchedules[0].due(600, 180);
+            _cdcSchedules[1].due(600, 480);
         }
         publishMqtt();
+        if (this->getId() == ID_ZONE_1 && !cdcGereeParConnect) _chaudiere.publishMqtt();
         _zone.publishMqtt();
-        firstLoop = false;
     }
 
-    if (this->getId() == ID_ZONE_1 && !cdcGereeParConnect && (now - _lastRecuperationTemperatureCDC >= 300000 || _lastRecuperationTemperatureCDC == 0)) { // 5 minutes
+    // Sans Connect : :03 et :08 de chaque tranche, hors créneaux des satellites.
+    if (this->getId() == ID_ZONE_1 && !cdcGereeParConnect
+        && (_cdcSchedules[0].due(600, 180) || _cdcSchedules[1].due(600, 480))) {
         info("[SATELLITE Z%d] Récupération de la température CDC...", getNumeroZone());
         if (recupererTemperatureCDC()) {
             _lastRecuperationTemperatureCDC = now;
@@ -363,25 +370,13 @@ bool Satellite::envoyerConsigne() {
             return false;
     }
 
-    if(_zone.boostActif()) { // TODO Revoir cette zone
-        payload.temperatureConsigne = _zone.getTemperatureConsigne() + _zone.getTemperatureBoost();
-    /*    if(getMode() == MODE::REDUIT_AUTO) {
-            payload.mode = MODE::CONFORT_DEROGATION;
-        } else if(getMode() == MODE::REDUIT_DEROGATION) {
-            payload.mode = MODE::CONFORT_AUTO;
-        } else if(getMode() == MODE::REDUIT_PERMANENT) {
-            payload.mode = MODE::CONFORT_PERMANENT;
-        } else if(getMode() == MODE::HORS_GEL) {
-            return false;
-        }*/
-    }
-
     if(getEtatChaudiere().arretChauffage) {
         payload.mode = MODE::HORS_GEL;
         payload.temperatureConsigne = isnan(_zone.getTemperatureHorsGel()) ? 8.0f : _zone.getTemperatureHorsGel();
     } 
 
-    payload.mode = encodeModeForSend((MODE)payload.mode);
+    const MODE modeEnvoye = (MODE)payload.mode;
+    payload.mode = encodeModeForSend(modeEnvoye);
     
     size_t length = 0;
     int16_t err;
@@ -413,6 +408,8 @@ bool Satellite::envoyerConsigne() {
         }
 
         setEtatChaudiere(donneesZones.etatChaudiere);
+        if(modeEnvoye == MODE::HORS_GEL) _zone.confirmerMode(Zone::MODE_ZONE::HORS_GEL, 0x10);
+        else _zone.confirmerMode();
         debug("[SATELLITE Z%d] Retour état chaudière : 0x%02X", getNumeroZone(), donneesZones.etatChaudiere);
         debug("[SATELLITE Z%d] Retour état chaudière : %s", getNumeroZone(), getEtatChaudiere().getLibelle().c_str());
         Date date = donneesZones.date;
@@ -425,11 +422,36 @@ bool Satellite::envoyerConsigne() {
 }
 
 bool Satellite::onReceive(byte* donnees, size_t length) { 
+    if(length < sizeof(FrisquetRadio::RadioTrameHeader)) {
+        return false;
+    }
     ReadBuffer readBuffer(donnees, length);
     FrisquetRadio::RadioTrameHeader* header = (FrisquetRadio::RadioTrameHeader*) readBuffer.getBytes(sizeof(FrisquetRadio::RadioTrameHeader));
 
     //info("[SATELLITE Z] Interception envoi consigne.", header->type);
     if(!_modeVirtuel) {
+
+        // Les échanges de consigne de 23 octets ne contiennent pas le programme.
+        // Attendre une écriture complète A154 : paramètres (6) + programme (42).
+        if(header->type == FrisquetRadio::MessageType::INIT &&
+           header->idExpediteur == getId() && !header->isAck() &&
+           readBuffer.remainingLength() >= sizeof(FrisquetRadio::RadioTrameInit)) {
+            ReadBuffer configurationBuffer = readBuffer;
+            FrisquetRadio::RadioTrameInit requete;
+            configurationBuffer.getBytes((byte*)&requete, sizeof(requete));
+            if(requete.adresseMemoireEcriture.toUInt16() == 0xA154 &&
+               requete.tailleMemoireEcriture.toUInt16() == 0x0018 &&
+               requete.longueurDonneesEcriture == 48 && configurationBuffer.remainingLength() >= 48) {
+                byte parametres[6];
+                configurationBuffer.getBytes(parametres, sizeof(parametres));
+                Zone::Programmation programmation;
+                configurationBuffer.getBytes((byte*)&programmation, sizeof(programmation));
+                _zone.setProgrammation(programmation, true);
+                _zone.saveConfig();
+                info("[SATELLITE Z%d] Programmation hebdomadaire reçue.", getNumeroZone());
+                return true;
+            }
+        }
 
         if(length == 23 && header->type == FrisquetRadio::MessageType::INIT && header->idExpediteur == this->getId() && header->idMessage != getIdMessage()) { // Réception en écoute
             FrisquetRadio::RadioTrameInit* requete = (FrisquetRadio::RadioTrameInit*) readBuffer.getBytes(sizeof(FrisquetRadio::RadioTrameInit));
@@ -511,7 +533,19 @@ bool Satellite::onReceive(byte* donnees, size_t length) {
                 _zone.setTemperatureAmbiante(donneesSatellite->temperatureAmbiante.toFloat());
                 
                 if(! getEcrasement()) {
+                    const auto modeDemande = _zone.getMode();
+                    const byte optionsDemandees = _zone.getModeOptions();
+                    const bool commandeConnectEnAttente = _zone.getSource() == Zone::SOURCE::CONNECT
+                        && _zone.getLastChange() > _zone.getLastEnvoi();
                     setModeFromRaw(donneesSatellite->mode);
+                    if(_zone.getSource() == Zone::SOURCE::SATELLITE_PHYSIQUE) {
+                        _zone.desactiverBoost();
+                        _zone.confirmerMode();
+                    }
+                    if(commandeConnectEnAttente) {
+                        _zone.setMode(modeDemande);
+                        _zone.setModeOptions(optionsDemandees);
+                    }
                     _zone.setTemperatureConsigne(donneesSatellite->temperatureConsigne.toFloat());
                     saveConfig();
                     _zone.saveConfig();

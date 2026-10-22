@@ -4,6 +4,7 @@
 #include "NetworkManager.h"
 #include "MQTT/MqttManager.h"
 #include "Frisquet/NetworkID.h"
+#include "RadioSettings.h"
 
 class Config {
     private:
@@ -14,6 +15,10 @@ class Config {
         Preferences _preferences;
 
         bool _useConnect = false;
+        bool _developerMode = false;
+        String _portalPassword = "admin";
+        float _radioRxBandwidth = RadioSettings::DEFAULT_RX_BANDWIDTH;
+        bool _radioLnaBypass = RadioSettings::DEFAULT_LNA_BYPASS;
         bool _useConnectPassive = false;
         bool _useSondeExterieure = false;
         bool _useDS18B20 = false;
@@ -30,6 +35,15 @@ class Config {
         Config();
         void load();
         void save();
+
+        bool developerMode() const { return _developerMode; }
+        void developerMode(bool enabled) { _developerMode = enabled; }
+        const String& portalPassword() const { return _portalPassword; }
+        void portalPassword(const String& password) { _portalPassword = password; }
+        float radioRxBandwidth() const { return _radioRxBandwidth; }
+        void radioRxBandwidth(float bandwidth) { _radioRxBandwidth = bandwidth; }
+        bool radioLnaBypass() const { return _radioLnaBypass; }
+        void radioLnaBypass(bool enabled) { _radioLnaBypass = enabled; }
 
         NetworkManager::Options& getWiFiOptions() { return _wifiOpts; }
         MqttManager::Options& getMQTTOptions() { return _mqttOpts; }

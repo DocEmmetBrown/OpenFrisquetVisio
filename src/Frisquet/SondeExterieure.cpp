@@ -127,10 +127,9 @@ void SondeExterieure::begin() {
 }
 
 void SondeExterieure::loop() {
-   uint32_t now = millis();
 
     if(estAssocie()) {
-        if (now - _lastEnvoiTemperatureExterieure >= 600000 || _lastEnvoiTemperatureExterieure == 0) { // 10 minutes
+        if (_temperatureSchedule.due(600, 240)) { // :04, :14, :24, :34, :44, :54
             info("[SONDE EXTERIEURE] Envoi de la température extérieure.");
             // Récupération de la température si DS18B20 activé.
             if(_ds18b20 != nullptr && _ds18b20->isReady()) {
@@ -144,14 +143,11 @@ void SondeExterieure::loop() {
             if(!isnan(getTemperatureExterieure())) {
                 if(envoyerTemperatureExterieure()) {
                     publishMqtt();
-                    _lastEnvoiTemperatureExterieure = now;
                 } else {
                     error("[SONDE EXTERIEURE] Echec de l'envoi de la température extérieure.");
-                    _lastEnvoiTemperatureExterieure = now <= 60000 ? 1 : now - 60000;; // Essai dans 1 minute
                 }
             } else {
                 warning("[SONDE EXTERIEURE] Aucune température disponible.");
-                _lastEnvoiTemperatureExterieure = now;
             }
         }
     }

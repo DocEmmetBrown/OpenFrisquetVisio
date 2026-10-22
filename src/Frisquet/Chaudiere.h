@@ -94,11 +94,13 @@ public:
     MODE_FONCTIONNEMENT getModeFonctionnement() const { return _modeFonctionnement; }
     uint16_t getModeFonctionnementRaw() const { return _modeFonctionnementRaw; }
     String getNomModeFonctionnement() const;
+    String getNomEtatChaudiere() const;
+    bool etatChaudiereConnu() const { return _etatChaudiereConnu; }
 
     void setPression(float pression);
     float getPression() const { return _pression; }
 
-    void setEtatChaudiere(byte etatChaudiere) { _etatChaudiere.set(etatChaudiere); }
+    void setEtatChaudiere(byte etatChaudiere) { _etatChaudiere.set(etatChaudiere); _etatChaudiereConnu = true; }
     ETAT_CHAUDIERE getEtatChaudiere() const { return _etatChaudiere; }
 
 private:
@@ -123,9 +125,11 @@ private:
     int16_t _lastPubConsommationECS = -1;
     int16_t _lastPubConsommationChauffage = -1;
     ETAT_CHAUDIERE _etatChaudiere;
+    bool _etatChaudiereConnu = false;
 
     struct {
         MqttEntity etatChaudiere;
+        MqttEntity anomalieChaudiere;
         MqttEntity modeFonctionnement;
         MqttEntity modeECS;
         MqttEntity tempECS;

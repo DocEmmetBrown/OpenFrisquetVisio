@@ -4,6 +4,7 @@
 #include <Preferences.h>
 #include "Logs.h"
 #include "../DS18B20.h"
+#include "RadioSchedule.h"
 
 class SondeExterieure : public FrisquetDevice {
     
@@ -27,7 +28,7 @@ class SondeExterieure : public FrisquetDevice {
         float _temperatureExterieure = NAN;
 
         DS18B20* _ds18b20 = nullptr;
-        uint32_t _lastEnvoiTemperatureExterieure = 0;
+        RadioSchedule _temperatureSchedule;
 
         // MQTT
 

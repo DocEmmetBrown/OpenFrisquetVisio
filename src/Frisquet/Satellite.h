@@ -5,6 +5,7 @@
 #include "Logs.h"
 #include "Zone.h"
 #include "Chaudiere.h"
+#include "RadioSchedule.h"
 
 class Satellite : public FrisquetDevice {
     
@@ -43,7 +44,10 @@ class Satellite : public FrisquetDevice {
         void setModeFromRaw(uint8_t rawMode);
         String getNomMode();
 
-        void setEcrasement(bool ecrasement) { _ecrasement = ecrasement; }
+        void setEcrasement(bool ecrasement) {
+            _ecrasement = ecrasement;
+            if(_zone.getSource() == Zone::SOURCE::SATELLITE_PHYSIQUE) _zone.setPilotageActif(ecrasement);
+        }
         bool getEcrasement() { return _ecrasement; }
 
         void setEtatChaudiere(byte etatChaudiere) { _chaudiere.setEtatChaudiere(etatChaudiere); }
@@ -59,6 +63,8 @@ class Satellite : public FrisquetDevice {
 
         uint32_t _lastEnvoiConsigne = 0;
         uint32_t _lastRecuperationTemperatureCDC = 0;
+        RadioSchedule _cdcSchedules[2];
+        bool _initialReadPending = true;
         bool _modeVirtuel = false;
         bool _ecrasement = false;
         bool _modeCompatConnect = false;

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OpenFrisquetVisio – Tableau de bord</title>
+  <style>
+    [hidden]{display:none!important}
+    :root {
+      --bg:#f3f6fa;--surface:#fff;--surface-soft:#f8fafc;--text:#172033;
+      --muted:#687386;--border:#dce3ec;--navy:#07305f;--blue:#0798df;
+      --red:#ef2d16;--green:#178653;--orange:#c86b08;--shadow:0 12px 32px rgba(31,48,75,.08)
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    a{text-decoration:none;color:inherit} button{font:inherit}
+    .shell{width:min(1180px,calc(100% - 32px));margin:0 auto}
+    .topbar{background:rgba(255,255,255,.96);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10;backdrop-filter:blur(12px)}
+    .topbar-inner{min-height:76px;display:flex;align-items:center;justify-content:space-between;gap:18px}
+    .logo{display:block;width:250px;max-width:55vw;height:auto}
+    .actions{display:flex;align-items:center;gap:10px}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:9px 15px;border:1px solid var(--border);border-radius:12px;background:#fff;color:var(--navy);font-weight:700;cursor:pointer;transition:.18s ease}
+    .btn:hover{transform:translateY(-1px);border-color:#afbdcc;box-shadow:0 6px 18px rgba(31,48,75,.08)}
+    .btn.primary{background:var(--navy);border-color:var(--navy);color:#fff}
+    main{padding:30px 0 44px}
+    .hero{display:grid;grid-template-columns:1.4fr .8fr;gap:18px;margin-bottom:18px}
+    .panel,.metric,.zone{background:var(--surface);border:1px solid var(--border);border-radius:20px;box-shadow:var(--shadow)}
+    .hero-main{padding:28px;background:linear-gradient(135deg,#fff 0%,#f2f8fd 100%)}
+    .eyebrow{margin:0 0 8px;color:var(--blue);font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}
+    h1,h2,h3,p{margin-top:0} h1{margin-bottom:8px;font-size:clamp(27px,4vw,40px);line-height:1.15;color:var(--navy)} h2{font-size:20px;color:var(--navy)}
+    .lead{max-width:680px;margin:0;color:var(--muted);font-size:16px}
+    .boiler-state{padding:24px;display:flex;flex-direction:column;justify-content:space-between}
+    .state-line{display:flex;align-items:center;gap:12px}.state-icon{display:grid;place-items:center;width:48px;height:48px;border-radius:15px;background:#edf7fd;font-size:26px}
+    .state-value{font-size:20px;font-weight:800;color:var(--navy)}.state-caption{font-size:13px;color:var(--muted)}
+    .status-row{display:flex;flex-wrap:wrap;gap:9px;margin-top:18px}
+    .status{display:inline-flex;align-items:center;gap:7px;padding:7px 11px;border-radius:999px;background:#eef2f6;color:#526075;font-size:13px;font-weight:700}
+    .status::before{content:"";width:8px;height:8px;border-radius:50%;background:#8793a3}
+    .status.ok{background:#e9f7f0;color:var(--green)}.status.ok::before{background:var(--green)}
+    .status.warn{background:#fff3e4;color:var(--orange)}.status.warn::before{background:var(--orange)}
+    .status.bad{background:#ffebe8;color:#b42318}.status.bad::before{background:#d92d20}
+    .section-head{display:flex;align-items:end;justify-content:space-between;gap:16px;margin:28px 2px 12px}.section-head h2{margin:0}.updated{color:var(--muted);font-size:12px}
+    .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+    .metric{padding:18px;min-height:138px;display:flex;flex-direction:column}.metric-icon{font-size:25px;margin-bottom:12px}.metric-label{color:var(--muted);font-size:13px;font-weight:650}
+    .metric-value{margin-top:auto;font-size:26px;line-height:1.15;font-weight:850;color:var(--navy)}.metric-note{margin-top:5px;color:var(--muted);font-size:12px}
+    .zones{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.zone{padding:20px}.zone-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:18px}
+    .zone-title{display:flex;gap:10px;align-items:center}.zone-title h3{margin:0;color:var(--navy)}.mode{padding:5px 9px;border-radius:999px;background:#edf7fd;color:#0879b1;font-size:12px;font-weight:800}
+    .zone-values{display:grid;grid-template-columns:1fr 1fr;gap:12px}.zone-value{padding:12px;border-radius:14px;background:var(--surface-soft);border:1px solid #edf0f4}
+    .zone-value span{display:block;color:var(--muted);font-size:12px}.zone-value strong{display:block;margin-top:3px;color:var(--navy);font-size:19px}.zone-source{margin-top:13px;color:var(--muted);font-size:12px}
+    .empty{grid-column:1/-1;padding:28px;text-align:center;color:var(--muted);background:#fff;border:1px dashed #bfc9d6;border-radius:18px}
+    .diagnostics{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}.diagnostic{padding:16px 18px;border:1px solid var(--border);border-radius:16px;background:#fff;color:var(--navy);font-weight:750}.diagnostic span{margin-right:8px}
+    footer{padding:18px 0 34px;color:var(--muted);font-size:12px;text-align:center}.skeleton{color:#a2acba}
+    @media(max-width:900px){.hero{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.zones{grid-template-columns:1fr}.diagnostics{grid-template-columns:1fr}}
+    @media(max-width:560px){.shell{width:min(100% - 20px,1180px)}.topbar-inner{min-height:66px}.logo{width:190px}.btn-label{display:none}.hero-main,.boiler-state{padding:20px}.metrics{grid-template-columns:1fr 1fr;gap:10px}.metric{padding:15px;min-height:126px}.metric-value{font-size:22px}}
+  </style>
+</head>
+<body>
+  <header class="topbar"><div class="shell topbar-inner">
+    <a href="/" aria-label="Accueil"><img class="logo" src="/logo.png" alt="OpenFrisquetVisio"></a>
+    <div class="actions"><button class="btn" id="refreshBtn" type="button" title="Actualiser">↻ <span class="btn-label">Actualiser</span></button><a class="btn primary" href="/settings">⚙️ <span class="btn-label">Paramètres</span></a></div>
+  </div></header>
+
+  <main class="shell">
+    <section class="hero">
+      <div class="panel hero-main"><p class="eyebrow">Tableau de bord</p><h1>Votre chauffage en un coup d’œil</h1><p class="lead">Températures, modes et état de la chaudière sont actualisés automatiquement.</p>
+        <div class="status-row"><span class="status" id="wifiStatus">Wi‑Fi…</span><span class="status" id="mqttStatus">MQTT…</span><span class="status" id="uptimeStatus">Démarrage…</span></div>
+      </div>
+      <div class="panel boiler-state"><div class="state-line"><div class="state-icon">🔥</div><div><div class="state-caption">État de la chaudière</div><div class="state-value skeleton" id="boilerState">Chargement…</div></div></div>
+        <div class="status-row"><span class="status" id="boilerAnomaly">Anomalie…</span><span class="status" id="hotWaterMode">ECS…</span></div>
+      </div>
+    </section>
+
+    <div class="section-head"><h2>🌡️ Températures et circuit</h2><span class="updated" id="lastUpdate">En attente des données</span></div>
+    <section class="metrics">
+      <article class="metric"><div class="metric-icon">🏡</div><div class="metric-label">Température extérieure</div><div class="metric-value skeleton" id="outdoorTemp">—</div><div class="metric-note" id="outdoorSource">Chaudière</div></article>
+      <article class="metric"><div class="metric-icon">🚿</div><div class="metric-label">Eau chaude sanitaire</div><div class="metric-value skeleton" id="hotWaterTemp">—</div><div class="metric-note" id="hotWaterTempNote">Température ECS</div></article>
+      <article class="metric"><div class="metric-icon">♨️</div><div class="metric-label">Corps de chauffe</div><div class="metric-value skeleton" id="heatingBodyTemp">—</div><div class="metric-note">Circuit chaudière</div></article>
+      <article class="metric"><div class="metric-icon">💨</div><div class="metric-label">Fumées</div><div class="metric-value skeleton" id="flueTemp">—</div><div class="metric-note">Température des fumées</div></article>
+      <article class="metric"><div class="metric-icon">💧</div><div class="metric-label">Pression</div><div class="metric-value skeleton" id="pressure">—</div><div class="metric-note">Circuit de chauffage</div></article>
+      <article class="metric"><div class="metric-icon">⚡</div><div class="metric-label">Puissance chauffage</div><div class="metric-value skeleton" id="heatingPower">—</div><div class="metric-note">Valeur instantanée</div></article>
+      <article class="metric"><div class="metric-icon">🚿</div><div class="metric-label">Puissance ECS</div><div class="metric-value skeleton" id="hotWaterPower">—</div><div class="metric-note">Valeur instantanée</div></article>
+      <article class="metric"><div class="metric-icon">📊</div><div class="metric-label">Consommation gaz</div><div class="metric-value skeleton" id="gasConsumption">—</div><div class="metric-note">Chauffage / ECS</div></article>
+    </section>
+
+    <div class="section-head"><h2>🛋️ Zones de chauffage</h2><a class="btn" href="/programming">Programmation</a></div><section class="zones" id="zones"><div class="empty">Chargement des zones…</div></section>
+    <div class="section-head"><h2>🛠️ Outils et diagnostic</h2></div>
+    <nav class="diagnostics"><a class="diagnostic" href="/logs"><span>📋</span>Journaux système</a><a class="diagnostic" href="/logs-radio" data-developer-only hidden><span>📡</span>Trames radio</a><a class="diagnostic" href="/memory" data-developer-only hidden><span>🧠</span>Mémoire chaudière</a></nav>
+  </main>
+  <footer>OpenFrisquetVisio · version {{OPENFRISQUETVISIO_VERSION}}</footer>
+
+  <script>
+    const $ = selector => document.querySelector(selector);
+    const value = (number, unit, decimals = 1) => number == null ? "—" : Number(number).toFixed(decimals) + " " + unit;
+    const integer = (number, unit) => number == null ? "—" : Number(number).toFixed(0) + (unit ? " " + unit : "");
+    function setText(selector, text){const element=$(selector);if(!element)return;element.textContent=text;element.classList.remove("skeleton")}
+    function setStatus(selector,text,tone){const element=$(selector);if(!element)return;element.textContent=text;element.className="status "+(tone||"")}
+    function formatUptime(seconds){const total=Math.max(0,Number(seconds||0));const days=Math.floor(total/86400);const hours=Math.floor((total%86400)/3600);const minutes=Math.floor((total%3600)/60);return(days?days+" j ":"")+hours+" h "+String(minutes).padStart(2,"0")}
+    function renderZones(zones){
+      const container=$("#zones");const enabled=(zones||[]).filter(zone=>zone.enabled);
+      if(!enabled.length){container.innerHTML='<div class="empty">Aucune zone de chauffage n’est activée.</div>';return}
+      container.innerHTML=enabled.map(zone=>`<article class="zone"><div class="zone-head"><div class="zone-title"><span>🛋️</span><h3>Zone ${zone.id}</h3></div><span class="mode">${zone.mode||"Inconnu"}${zone.boost&&zone.mode!=="Boost"?" · Boost":""}</span></div><div class="zone-values"><div class="zone-value"><span>Ambiance</span><strong>${value(zone.ambientTemperature,"°C")}</strong></div><div class="zone-value"><span>Consigne</span><strong>${value(zone.setpointTemperature,"°C")}</strong></div><div class="zone-value"><span>Départ</span><strong>${value(zone.flowTemperature,"°C")}</strong></div><div class="zone-value"><span>Consigne départ</span><strong>${value(zone.flowSetpointTemperature,"°C")}</strong></div></div><div class="zone-source">Source : ${zone.source||"inconnue"}</div></article>`).join("")
+    }
+    function render(data){
+      document.querySelectorAll("[data-developer-only]").forEach(element=>element.hidden=data.developerMode!==true);
+      const network=data.connectivity||{},boiler=data.boiler||{},probe=data.outdoorProbe||{};
+      setStatus("#wifiStatus",network.wifiConnected?`Wi‑Fi · ${network.ssid||network.ip||"connecté"}`:"Wi‑Fi déconnecté",network.wifiConnected?"ok":"bad");
+      setStatus("#mqttStatus",network.mqttConnected?"MQTT connecté":"MQTT déconnecté",network.mqttConnected?"ok":"warn");setStatus("#uptimeStatus","Actif depuis "+formatUptime(data.uptimeSec),"ok");
+      setText("#boilerState",boiler.enabled?(boiler.state||"Inconnu"):"Non configurée");setStatus("#boilerAnomaly",boiler.anomaly==null?"Anomalie · inconnue":boiler.anomaly?"Anomalie détectée":"Aucune anomalie",boiler.anomaly==null?"warn":boiler.anomaly?"bad":"ok");setStatus("#hotWaterMode","ECS · "+(boiler.hotWaterMode||"Inconnu"),boiler.hotWaterMode==="Stop"?"warn":"ok");
+      const outdoor=probe.enabled&&probe.temperature!=null?probe.temperature:boiler.outdoorTemperature;setText("#outdoorTemp",value(outdoor,"°C"));setText("#outdoorSource",probe.enabled&&probe.temperature!=null?"Sonde extérieure":"Chaudière");
+      setText("#hotWaterTempNote",boiler.hotWaterTemperature==null?"Température ECS indisponible":"Température ECS");
+      setText("#hotWaterTemp",value(boiler.hotWaterTemperature,"°C"));setText("#heatingBodyTemp",value(boiler.heatingBodyTemperature,"°C"));setText("#flueTemp",value(boiler.flueTemperature,"°C"));setText("#pressure",value(boiler.pressure,"bar",2));setText("#heatingPower",value(boiler.heatingPower,"kW"));setText("#hotWaterPower",value(boiler.hotWaterPower,"kW"));
+      const heatingGas=integer(boiler.heatingConsumption,"kWh"),hotWaterGas=integer(boiler.hotWaterConsumption,"kWh");setText("#gasConsumption",heatingGas==="—"&&hotWaterGas==="—"?"—":heatingGas+" / "+hotWaterGas);renderZones(data.zones);$("#lastUpdate").textContent="Mis à jour à "+new Date().toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit",second:"2-digit"})
+    }
+    async function loadDashboard(){const button=$("#refreshBtn");if(button)button.disabled=true;try{const response=await fetch("/api/dashboard",{cache:"no-store"});if(!response.ok)throw new Error("HTTP "+response.status);render(await response.json())}catch(error){setStatus("#wifiStatus","Données indisponibles","bad");$("#lastUpdate").textContent="Impossible d’actualiser le tableau de bord"}finally{if(button)button.disabled=false}}
+    $("#refreshBtn").addEventListener("click",loadDashboard);loadDashboard();setInterval(loadDashboard,5000);
+  </script>
+</body>
+</html>
