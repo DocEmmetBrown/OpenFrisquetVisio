@@ -370,25 +370,13 @@ bool Satellite::envoyerConsigne() {
             return false;
     }
 
-    if(_zone.boostActif()) { // TODO Revoir cette zone
-        payload.temperatureConsigne = _zone.getTemperatureConsigne() + _zone.getTemperatureBoost();
-    /*    if(getMode() == MODE::REDUIT_AUTO) {
-            payload.mode = MODE::CONFORT_DEROGATION;
-        } else if(getMode() == MODE::REDUIT_DEROGATION) {
-            payload.mode = MODE::CONFORT_AUTO;
-        } else if(getMode() == MODE::REDUIT_PERMANENT) {
-            payload.mode = MODE::CONFORT_PERMANENT;
-        } else if(getMode() == MODE::HORS_GEL) {
-            return false;
-        }*/
-    }
-
     if(getEtatChaudiere().arretChauffage) {
         payload.mode = MODE::HORS_GEL;
         payload.temperatureConsigne = isnan(_zone.getTemperatureHorsGel()) ? 8.0f : _zone.getTemperatureHorsGel();
     } 
 
-    payload.mode = encodeModeForSend((MODE)payload.mode);
+    const MODE modeEnvoye = (MODE)payload.mode;
+    payload.mode = encodeModeForSend(modeEnvoye);
     
     size_t length = 0;
     int16_t err;
@@ -420,6 +408,8 @@ bool Satellite::envoyerConsigne() {
         }
 
         setEtatChaudiere(donneesZones.etatChaudiere);
+        if(modeEnvoye == MODE::HORS_GEL) _zone.confirmerMode(Zone::MODE_ZONE::HORS_GEL, 0x10);
+        else _zone.confirmerMode();
         debug("[SATELLITE Z%d] Retour état chaudière : 0x%02X", getNumeroZone(), donneesZones.etatChaudiere);
         debug("[SATELLITE Z%d] Retour état chaudière : %s", getNumeroZone(), getEtatChaudiere().getLibelle().c_str());
         Date date = donneesZones.date;
@@ -543,7 +533,19 @@ bool Satellite::onReceive(byte* donnees, size_t length) {
                 _zone.setTemperatureAmbiante(donneesSatellite->temperatureAmbiante.toFloat());
                 
                 if(! getEcrasement()) {
+                    const auto modeDemande = _zone.getMode();
+                    const byte optionsDemandees = _zone.getModeOptions();
+                    const bool commandeConnectEnAttente = _zone.getSource() == Zone::SOURCE::CONNECT
+                        && _zone.getLastChange() > _zone.getLastEnvoi();
                     setModeFromRaw(donneesSatellite->mode);
+                    if(_zone.getSource() == Zone::SOURCE::SATELLITE_PHYSIQUE) {
+                        _zone.desactiverBoost();
+                        _zone.confirmerMode();
+                    }
+                    if(commandeConnectEnAttente) {
+                        _zone.setMode(modeDemande);
+                        _zone.setModeOptions(optionsDemandees);
+                    }
                     _zone.setTemperatureConsigne(donneesSatellite->temperatureConsigne.toFloat());
                     saveConfig();
                     _zone.saveConfig();

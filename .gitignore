@@ -14,3 +14,7 @@ tests/*
 !tests/radio_crc_test.cpp
 !tests/test_portal_auth.py
 !tests/portal-password.test.mjs
+
+!tests/test_zone_modes.py
+!tests/test_boiler_state.py
+!tests/boiler-state.test.mjs

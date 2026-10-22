@@ -44,7 +44,10 @@ class Satellite : public FrisquetDevice {
         void setModeFromRaw(uint8_t rawMode);
         String getNomMode();
 
-        void setEcrasement(bool ecrasement) { _ecrasement = ecrasement; }
+        void setEcrasement(bool ecrasement) {
+            _ecrasement = ecrasement;
+            if(_zone.getSource() == Zone::SOURCE::SATELLITE_PHYSIQUE) _zone.setPilotageActif(ecrasement);
+        }
         bool getEcrasement() { return _ecrasement; }
 
         void setEtatChaudiere(byte etatChaudiere) { _chaudiere.setEtatChaudiere(etatChaudiere); }

@@ -26,7 +26,7 @@ void Chaudiere::begin(std::function<void(const String&)> modeEcsCommandCb) {
     _mqttEntities.modeFonctionnement.component = "sensor";
     _mqttEntities.modeFonctionnement.stateTopic = MqttTopic(MqttManager::compose({device->baseTopic, "chaudiere", "modeFonctionnement"}), 0, true);
     _mqttEntities.modeFonctionnement.set("icon", "mdi:hvac");
-    _mqtt.registerEntity(*device, _mqttEntities.modeFonctionnement, true);
+    _mqtt.removeEntityDiscovery(*device, _mqttEntities.modeFonctionnement);
 
     _mqttEntities.tempECS.id = "temperatureECS";
     _mqttEntities.tempECS.name = "Température ECS";
@@ -131,9 +131,8 @@ void Chaudiere::begin(std::function<void(const String&)> modeEcsCommandCb) {
 }
 
 void Chaudiere::publishMqtt() {
-    _mqtt.publishState(_mqttEntities.etatChaudiere, getEtatChaudiere().getLibelle().c_str());
-    _mqtt.publishState(_mqttEntities.anomalieChaudiere, getEtatChaudiere().anomalieDetecte() ? "ON" : "OFF");
-    _mqtt.publishState(_mqttEntities.modeFonctionnement, getNomModeFonctionnement());
+    _mqtt.publishState(_mqttEntities.etatChaudiere, getNomEtatChaudiere());
+    _mqtt.publishState(_mqttEntities.anomalieChaudiere, !etatChaudiereConnu() ? "None" : getEtatChaudiere().anomalieDetecte() ? "ON" : "OFF");
 
     const bool temperatureEcsDisponible = isfinite(getTemperatureECS());
     if (temperatureEcsDisponible) {
@@ -213,6 +212,19 @@ String Chaudiere::getNomModeFonctionnement() const {
             return "Chauffage radiateurs";
         case MODE_FONCTIONNEMENT::CHAUFFAGE_ECS:
             return "Chauffage ECS";
+        default:
+            return "Inconnu";
+    }
+}
+
+String Chaudiere::getNomEtatChaudiere() const {
+    // Utiliser uniquement les indicateurs de fonctionnement et le mode radio.
+    if(etatChaudiereConnu() && !_etatChaudiere.fonctionnement) return "Veille";
+    switch(getModeFonctionnement()) {
+        case MODE_FONCTIONNEMENT::CHAUFFAGE_ECS:
+            return "Chauffage ECS";
+        case MODE_FONCTIONNEMENT::CHAUFFAGE_RADIATEURS:
+            return etatChaudiereConnu() && _etatChaudiere.arretChauffage ? "Veille" : "Chauffage";
         default:
             return "Inconnu";
     }

@@ -426,6 +426,7 @@ static String programmationRevision(Zone& zone) {
 
 static String programmationReadOnlyReason(Config& cfg, Connect& connect, Zone& zone, bool enabled) {
   if(!enabled) return "Cette zone est désactivée.";
+  if(zone.getSource() == Zone::SOURCE::SATELLITE_VIRTUEL) return "";
   if(!cfg.useConnect()) return "Activez le Connect virtuel pour modifier la programmation.";
   if(cfg.useConnectPassive()) return "Le Connect est en écoute passive : programmation en lecture seule.";
   if(zone.getSource() != Zone::SOURCE::CONNECT) return "La modification de programmation nécessite une zone pilotée par le Connect.";
@@ -493,8 +494,10 @@ void Portal::handlePostProgrammation() {
   }
   zone.modifierProgrammation(programmation);
   zone.saveConfig();
-  info("[PORTAIL] Programmation de la zone %d enregistrée, en attente d'envoi Connect.", index + 1);
-  _srv.send(200, "application/json; charset=utf-8", "{\"ok\":true,\"revision\":\"" + programmationRevision(zone) + "\",\"pending\":true}");
+  info("[PORTAIL] Programmation de la zone %d enregistrée (%s).", index + 1,
+       zone.programmationEnvoiEnAttente() ? "envoi Connect en attente" : "programme local");
+  _srv.send(200, "application/json; charset=utf-8", "{\"ok\":true,\"revision\":\"" + programmationRevision(zone)
+       + "\",\"pending\":" + String(zone.programmationEnvoiEnAttente() ? "true" : "false") + "}");
 }
 
 void Portal::handleLogo() {
@@ -530,9 +533,8 @@ void Portal::handleDashboard() {
       || cfg.useSatelliteZ1() || cfg.useSatelliteZ2() || cfg.useSatelliteZ3();
   json += "\"boiler\":{";
   json += "\"enabled\":" + String(chaudiereEnabled ? "true" : "false") + ",";
-  json += "\"state\":\"" + jsonEscape(etat.getLibelle()) + "\",";
-  json += "\"anomaly\":" + String(etat.anomalieDetecte() ? "true" : "false") + ",";
-  json += "\"heatingMode\":\"" + jsonEscape(chaudiere.getNomModeFonctionnement()) + "\",";
+  json += "\"state\":\"" + jsonEscape(chaudiere.getNomEtatChaudiere()) + "\",";
+  json += "\"anomaly\":" + String(!chaudiere.etatChaudiereConnu() ? "null" : etat.anomalieDetecte() ? "true" : "false") + ",";
   json += "\"hotWaterMode\":\"" + jsonEscape(chaudiere.getNomModeECS()) + "\",";
   json += "\"outdoorTemperature\":" + jsonFloat(chaudiere.getTemperatureExterieure()) + ",";
   json += "\"hotWaterTemperature\":" + jsonFloat(chaudiere.getTemperatureECS()) + ",";

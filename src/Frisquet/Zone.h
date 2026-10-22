@@ -40,9 +40,18 @@ class Zone {
             byte samedi[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
         };
         
+        static_assert(sizeof(Programmation) == 42, "Programme hebdomadaire : 42 octets");
+
         Zone(uint8_t idZone, MqttManager& mqtt) : _idZone(idZone), _mqtt(mqtt) {}
 
         void begin();
+        void loop();
+        void setPilotageActif(bool actif);
+        bool pilotageDisponible() const { return _pilotageActif; }
+        bool appliquerPreset(const String& preset);
+        bool appliquerConsigne(float temperature);
+        void confirmerMode(MODE_ZONE mode, byte options);
+        void confirmerMode() { confirmerMode(_mode, _modeOptions); }
         MqttManager& mqtt() { return _mqtt; }
         void loadConfig();
         void saveConfig();
@@ -108,13 +117,27 @@ class Zone {
         void modifierProgrammation(const Programmation& programmation) {
             memcpy(&_programmation, &programmation, sizeof(programmation));
             _programmationRecue = true;
-            _programmationEnvoiEnAttente = true;
+            _programmationEnvoiEnAttente = _source != SOURCE::SATELLITE_VIRTUEL;
+            if(_source == SOURCE::SATELLITE_VIRTUEL) _derogationFin = 0;
             refreshLastChange();
         }
         bool programmationEnvoiEnAttente() const { return _programmationEnvoiEnAttente; }
         bool programmationRecue() const { return _programmationRecue; }
 
     private:
+        bool programmeLocal() const { return _source != SOURCE::CONNECT; }
+        bool programmeDisponible() const;
+        bool regimeProgramme(bool& confort, uint32_t* prochaineTransition = nullptr) const;
+        void actualiserDecouverte();
+        void publierMode();
+        void actualiserConsigne();
+        bool _pilotageActif = false;
+        bool _mqttPret = false;
+        bool _mqttConnecte = false;
+        uint8_t _capacitesPubliees = 0xFF;
+        uint32_t _derogationFin = 0;
+        MODE_ZONE _modeObserve = MODE_ZONE::INCONNU;
+        byte _optionsObservees = 0;
         MqttManager& _mqtt;
         struct {
             MqttEntity mode;
@@ -128,6 +151,8 @@ class Zone {
             MqttEntity temperatureBoost;
             MqttEntity boost;
             MqttEntity thermostat;
+            MqttEntity preset;
+            MqttEntity regime;
         } _mqttEntities;
 
         uint8_t _idZone = 0x00;

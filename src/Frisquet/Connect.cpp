@@ -77,7 +77,7 @@ bool Connect::envoyerZone(Zone& zone) {
     static_assert(sizeof(payload) == 48, "La configuration zone doit contenir 48 octets");
     
     if(zone.boostActif()) {
-        payload.temperatureConfort = zone.getTemperatureConfort() + zone.getTemperatureBoost();
+        payload.temperatureConfort = std::min(30.0f, zone.getTemperatureConfort() + zone.getTemperatureBoost());
     } else {
         payload.temperatureConfort = zone.getTemperatureConfort();
     }
@@ -703,6 +703,7 @@ bool Connect::onReceive(byte* donnees, size_t length) {
             }
 
             getZone(zoneId).setProgrammation(donneesZone.programmation, true);
+            getZone(zoneId).confirmerMode((Zone::MODE_ZONE)donneesZone.mode, donneesZone.modeOptions);
             // Conserver une commande locale en attente pendant l'acquisition.
             if(!getZone(zoneId).programmationEnvoiEnAttente() && getZone(zoneId).getLastChange() <= getZone(zoneId).getLastEnvoi()) {
                 getZone(zoneId).setMode((Zone::MODE_ZONE)donneesZone.mode);

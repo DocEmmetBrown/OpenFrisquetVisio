@@ -25,6 +25,7 @@ void FrisquetManager::begin()
         } else {
             _zone1.setSource(Zone::SOURCE::SATELLITE_PHYSIQUE);
         }
+        _zone1.setPilotageActif(_cfg.useSatelliteVirtualZ1() || (_cfg.useConnect() && !_cfg.useConnectPassive()));
         _zone1.begin();
     }
     
@@ -36,6 +37,7 @@ void FrisquetManager::begin()
         } else {
             _zone2.setSource(Zone::SOURCE::SATELLITE_PHYSIQUE);
         }
+        _zone2.setPilotageActif(_cfg.useSatelliteVirtualZ2() || (_cfg.useConnect() && !_cfg.useConnectPassive()));
         _zone2.begin();
     }
 
@@ -47,6 +49,7 @@ void FrisquetManager::begin()
         } else {
             _zone3.setSource(Zone::SOURCE::SATELLITE_PHYSIQUE);
         }
+        _zone3.setPilotageActif(_cfg.useSatelliteVirtualZ3() || (_cfg.useConnect() && !_cfg.useConnectPassive()));
         _zone3.begin();
     }
 
@@ -103,6 +106,10 @@ void FrisquetManager::loop()
     if (FrisquetRadio::receivedFlag || _radio.hasReceivedPacket() || _radio.hasBufferedPacket()) {
         onRadioReceive();
     }
+
+    if(_cfg.useZone1()) _zone1.loop();
+    if(_cfg.useZone2()) _zone2.loop();
+    if(_cfg.useZone3()) _zone3.loop();
 
     if (_cfg.useConnect()) {
         _connect.loop();
