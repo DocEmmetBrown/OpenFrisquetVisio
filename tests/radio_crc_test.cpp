@@ -69,20 +69,11 @@ int main() {
         0,0,0,0,0,0,0,0x02,0x96,0x59,0x55,0x55,0x55,0x3B,0xB2,
         0x7F,0x27,0xEF,0xFF,0xFE,0xE3,0xFF,0x7F,0x2F,0xAA,0x7E
     };
-    uint8_t expected[52];
-    memcpy(expected, realMulti, sizeof(expected));
-    expected[40] = 0x04; expected[41] = 0xF6; expected[49] = 0;
-    expected[50] = 0x52; expected[51] = 0xCB;
-    assert(valid(expected, 49));
     memset(out, 0xA5, sizeof(out));
-    Result multi = decode(realMulti, sizeof(realMulti), out + 1);
-    assert(multi.status == Status::Repaired && multi.correctedBits == 3);
-    assert(multi.adjustment == 3);
-    assert(multi.bits[0] == 255 && multi.bits[1] == 334 && multi.bits[2] == 334);
-    assert(memcmp(out + 1, expected + 1, 49) == 0);
-    assert(out[0] == 0xA5 && out[50] == 0xA5);
+    assert(decode(realMulti, sizeof(realMulti), out + 1).status == Status::Invalid);
+    for (uint8_t byte : out) assert(byte == 0xA5);
 
-    // Deux et trois zéros, dans les deux sens, au même endroit ou répartis.
+    // Deux et trois changements dans une même suite sont rejetés dans les deux sens.
     uint8_t intermediate[RAW_LENGTH];
     for (uint8_t count = 2; count <= 3; ++count) {
         for (bool extra : directions) {
@@ -91,10 +82,10 @@ int main() {
                 slip(damaged, intermediate, 450, extra);
                 memcpy(damaged, intermediate, sizeof(damaged));
             }
-            multi = decode(damaged, sizeof(damaged), out);
-            assert(multi.status == Status::Repaired && multi.correctedBits == count);
-            assert(multi.adjustment == (extra ? -count : count));
-            assert(memcmp(out, raw + 1, MAX_PAYLOAD) == 0);
+            memset(out, 0xA5, sizeof(out));
+            const Result rejected = decode(damaged, sizeof(damaged), out);
+            assert(rejected.status == Status::Invalid && rejected.correctedBits == 0);
+            for (uint8_t byte : out) assert(byte == 0xA5);
         }
     }
     // Quatre zéros manquants dépassent la limite autorisée.
@@ -110,13 +101,13 @@ int main() {
         for (bool extraSecond : directions) {
             slip(raw, intermediate, 450, extraSecond);
             slip(intermediate, damaged, 200, extraFirst);
-            multi = decode(damaged, sizeof(damaged), out);
-            assert(multi.status == Status::Repaired && multi.correctedBits == 2);
-            assert(memcmp(out, raw + 1, MAX_PAYLOAD) == 0);
+            memset(out, 0xA5, sizeof(out));
+            assert(decode(damaged, sizeof(damaged), out).status == Status::Invalid);
+            for (uint8_t byte : out) assert(byte == 0xA5);
         }
     }
 
-    // Aucune solution simple, plusieurs solutions dans la passe étendue.
+    // Ancien cas ambigu à plusieurs changements : aucune passe étendue autorisée.
     const uint8_t extendedAmbiguous[RAW_LENGTH] = {
         0x3F,0x64,0x3D,0x0A,0xFA,0xF0,0x03,0xAA,0x9E,0x59,0xAB,0x4E,
         0,0,0,0,0,0,0xBA,0xE4,0x49,0x98,0x5C,0x47,0,0,0,0,0,0,
@@ -125,11 +116,11 @@ int main() {
         0,0,0,0,0,0,0,0,0,0,0,0x02,0x91,0x96,0x55,0x78
     };
     memset(out, 0xA5, sizeof(out));
-    assert(decode(extendedAmbiguous, RAW_LENGTH, out).status == Status::Ambiguous);
+    assert(decode(extendedAmbiguous, RAW_LENGTH, out).status == Status::Invalid);
     for (uint8_t byte : out) assert(byte == 0xA5);
 
     // Ancien rejet à 14:28 : glissement + autre altération du CRC. Il doit
-    // rester rejeté, même après élargissement de la recherche.
+    // rester rejeté avec la recherche limitée à un seul changement.
     const uint8_t badCrc[RAW_LENGTH] = {
         0x3F,0x7E,0x80,0xAA,0x3A,0x81,0x03,0x38,0x00,0xC8,0x04,0xF6,
         0x04,0xF6,0x01,0x16,0x00,0xC6,0x00,0xC6,0x00,0xCD,0,0,0,0,
@@ -140,13 +131,13 @@ int main() {
     assert(decode(badCrc, RAW_LENGTH, out).status == Status::Invalid);
     for (uint8_t byte : out) assert(byte == 0xA5);
 
-    // Limite de travail atteinte : rejet, même si une solution a été trouvée
-    // sans que toute la recherche d'unicité ait pu être terminée.
+    // Trame très fragmentée : recherche simple bornée par le nombre de suites,
+    // sans combinaisons ni passe supplémentaire.
     uint8_t fragmented[RAW_LENGTH] = {};
     fragmented[0] = 63; fragmented[6] = 3; fragmented[65] = 0x12;
     for (size_t bit = 56; bit < 512; bit += 17)
         fragmented[bit / 8] |= 1U << (7 - bit % 8);
-    assert(decode(fragmented, RAW_LENGTH, out).status == Status::SearchLimit);
+    assert(decode(fragmented, RAW_LENGTH, out).status == Status::Invalid);
     for (uint8_t byte : out) assert(byte == 0xA5);
 
     // Deux reconstructions différentes passent le CRC : rejeter sans copier.
@@ -204,5 +195,5 @@ int main() {
     for (size_t length = 0; length < MAX_PAYLOAD + 3; ++length)
         assert(decode(raw, length, out).status != Status::Repaired);
     assert(decode(raw, RAW_LENGTH + 1, out).status == Status::Invalid);
-    puts("OK: CRC, frames 6..63, slips 1..3, real capture 52CB, ambiguity, rejection and bounds");
+    puts("OK: CRC, frames 6..63, single slips, rejection of multiple slips, ambiguity and bounds");
 }

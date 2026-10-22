@@ -134,13 +134,6 @@ int16_t Radio::finishReceive(int16_t result, const char* operation, const uint8_
                      static_cast<unsigned>(_radio.crcResult.bit),
                      static_cast<int>(_radio.crcResult.adjustment),
                      static_cast<unsigned>(_radio.crcResult.correctedBits), _lastPacketRSSI);
-        if (_radio.crcResult.correctedBits > 1) {
-            for (uint8_t i = 0; i < _radio.crcResult.correctedBits; ++i) {
-                logs.addLogf("RADIO", "[RX][CRC_REPAIR_CHANGE][bit=%u][zero=%+d]",
-                             static_cast<unsigned>(_radio.crcResult.bits[i]),
-                             static_cast<int>(_radio.crcResult.zeroAdjustments[i]));
-            }
-        }
         logRadioCrcData(_radio.raw, _radio.rawLength, "CRC_RAW");
     }
     if (result == RADIOLIB_ERR_CRC_MISMATCH) {
