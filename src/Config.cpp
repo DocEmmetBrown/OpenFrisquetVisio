@@ -22,6 +22,8 @@ void Config::load() {
 
   // WIFI
   _developerMode = _preferences.getBool("developerMode", false);
+  _portalPassword = _preferences.getString("portalPass", "admin");
+  if (_portalPassword.isEmpty()) _portalPassword = "admin";
   _radioRxBandwidth = _preferences.getFloat("radioRxBw", RadioSettings::DEFAULT_RX_BANDWIDTH);
   if (!RadioSettings::validRxBandwidth(_radioRxBandwidth)) {
     _radioRxBandwidth = RadioSettings::DEFAULT_RX_BANDWIDTH;
@@ -95,6 +97,7 @@ void Config::save() {
 
   // WIFI
   _preferences.putBool("developerMode", _developerMode);
+  _preferences.putString("portalPass", _portalPassword);
   _preferences.putFloat("radioRxBw", _radioRxBandwidth);
   _preferences.putBool("radioBypass", _radioLnaBypass);
   _preferences.putString("wifiHostname", _wifiOpts.hostname);

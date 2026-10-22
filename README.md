@@ -109,12 +109,21 @@ Avant le flash :
 
 1. Se connecter au WiFi créé : `OpenFrisquetVisio-Setup`, mot de passe `frisquetconfig`
 2. Ouvrir un navigateur sur `192.168.4.1`
-3. Renseigner :
+3. Saisir le mot de passe du portail : `admin` par défaut, sans identifiant
+4. Renseigner :
    - Vos **informations WiFi**
    - Vos **informations MQTT**
    - Vos **Les modules à utiliser**
    - **Mode passif Connect** si une box Connect est déjà présente
-4. Sauvegarder → le module redémarre automatiquement
+5. Sauvegarder → le module redémarre automatiquement
+
+Le mot de passe du portail se modifie dans **Paramètres → Système → Accès au portail**.
+Renseigner le nouveau mot de passe et sa confirmation, puis enregistrer.
+Laisser les deux champs vides conserve le mot de passe actuel. Il est sauvegardé
+sur l’appareil et conservé après redémarrage. Les pages et les API du portail
+nécessitent une connexion ; les sessions expirent après 12 heures ou au
+redémarrage, et un changement de mot de passe déconnecte toutes les sessions.
+Le bouton **Se déconnecter** se trouve dans la même section.
 
 ---
 
@@ -192,4 +201,4 @@ Mais bon, si ça marche, vous pouvez toujours m’offrir un café ☕ 😉
 **Année :** 2025  
 **Plateforme :** ESP32 (Heltec WiFi LoRa 32, SX1262)  
 **Compatibilité :** Home Assistant, MQTT, Frisquet Chaudière série Eco Radio Visio  
-**Version :** 26.10.22.0954
+**Version :** 26.10.22.1009

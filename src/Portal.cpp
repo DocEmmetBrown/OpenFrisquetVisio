@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #include <cstring>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include "Frisquet/NetworkID.h" 
 #include "Version.h"
 #include "generated/WebAssets.h"
@@ -157,41 +158,185 @@ static bool parseBoolArg(const String& s, bool defaultVal) {
 Portal::Portal(FrisquetManager& frisquetManager, uint16_t port)
 : _srv(port), _frisquetManager(frisquetManager) {}
 
+String Portal::sessionCookie() {
+  const String cookies = _srv.header("Cookie");
+  int start = 0;
+  while (start < static_cast<int>(cookies.length())) {
+    int end = cookies.indexOf(';', start);
+    if (end < 0) end = cookies.length();
+    String cookie = cookies.substring(start, end);
+    cookie.trim();
+    if (cookie.startsWith("ofv_session=")) return cookie.substring(12);
+    start = end + 1;
+  }
+  return String();
+}
+
+bool Portal::isAuthenticated() {
+  const String token = sessionCookie();
+  if (token.length() != 64) return false;
+  const uint64_t now = static_cast<uint64_t>(esp_timer_get_time()) / 1000;
+  for (Session& session : _sessions) {
+    if (now - session.started >= SESSION_DURATION_MS) session.token[0] = '\0';
+    if (session.token[0] && token == session.token) return true;
+  }
+  return false;
+}
+
+bool Portal::requireAuthentication() {
+  _srv.sendHeader("Cache-Control", "no-store");
+  if (isAuthenticated()) return true;
+  if (_srv.uri().startsWith("/api/")) {
+    _srv.send(401, "application/json; charset=utf-8",
+              "{\"ok\":false,\"err\":\"Authentification requise\"}");
+  } else {
+    _srv.sendHeader("Location", "/login");
+    _srv.send(303, "text/plain; charset=utf-8", "Connexion requise");
+  }
+  return false;
+}
+
+void Portal::createSession() {
+  const uint64_t now = static_cast<uint64_t>(esp_timer_get_time()) / 1000;
+  Session* selected = &_sessions[0];
+  for (Session& session : _sessions) {
+    if (!session.token[0] || now - session.started >= SESSION_DURATION_MS) {
+      selected = &session;
+      break;
+    }
+    if (now - session.started > now - selected->started) selected = &session;
+  }
+  uint8_t random[32];
+  esp_fill_random(random, sizeof(random));
+  for (size_t i = 0; i < sizeof(random); ++i) {
+    snprintf(selected->token + i * 2, 3, "%02x", random[i]);
+  }
+  selected->started = now;
+  _srv.sendHeader("Set-Cookie", String("ofv_session=") + selected->token
+                 + "; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200");
+}
+
+void Portal::clearSessions() {
+  for (Session& session : _sessions) session.token[0] = '\0';
+  _srv.sendHeader("Set-Cookie",
+                 "ofv_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+}
+
+void Portal::sendLoginPage(int status, const char* message) {
+  String page = FPSTR(WebAssets::LOGIN_HTML);
+  page.replace("{{LOGIN_ERROR}}", message);
+  _srv.sendHeader("Cache-Control", "no-store");
+  _srv.send(status, "text/html; charset=utf-8", page);
+}
+
+void Portal::handleLoginPage() {
+  if (isAuthenticated()) {
+    _srv.sendHeader("Cache-Control", "no-store");
+    _srv.sendHeader("Location", "/");
+    _srv.send(303);
+    return;
+  }
+  sendLoginPage(200, "");
+}
+
+void Portal::handleLogin() {
+  const uint32_t now = millis();
+  if (_loginBlocked && now - _loginBlockedAt < 30000UL) {
+    _srv.sendHeader("Retry-After", "30");
+    sendLoginPage(429, "Trop de tentatives. Réessayez dans 30 secondes.");
+    return;
+  }
+  if (_loginBlocked) { _loginBlocked = false; _failedLogins = 0; }
+  const String password = _srv.arg("password");
+  if (password.isEmpty() || password.length() > 64
+      || password != _frisquetManager.config().portalPassword()) {
+    if (++_failedLogins >= 5) {
+      _loginBlocked = true;
+      _loginBlockedAt = now;
+      _srv.sendHeader("Retry-After", "30");
+      sendLoginPage(429, "Trop de tentatives. Réessayez dans 30 secondes.");
+    } else {
+      sendLoginPage(401, "Mot de passe incorrect.");
+    }
+    return;
+  }
+  _failedLogins = 0;
+  createSession();
+  _srv.sendHeader("Cache-Control", "no-store");
+  _srv.sendHeader("Location", "/");
+  _srv.send(303);
+}
+
+void Portal::handleLogout() {
+  const String token = sessionCookie();
+  for (Session& session : _sessions) {
+    if (token == session.token) session.token[0] = '\0';
+  }
+  _srv.sendHeader("Cache-Control", "no-store");
+  _srv.sendHeader("Set-Cookie",
+                 "ofv_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+  _srv.sendHeader("Location", "/login");
+  _srv.send(303);
+}
+
+void Portal::onAuthenticated(const char* uri, HTTPMethod method, void (Portal::*handler)(),
+                             void (Portal::*uploadHandler)()) {
+  auto authenticatedHandler = [this, handler]() {
+    if (requireAuthentication()) (this->*handler)();
+  };
+  if (uploadHandler) {
+    _srv.on(uri, method, authenticatedHandler, [this, uploadHandler]() {
+      // L'upload est traité AVANT le handler final : vérifier chaque callback
+      // avant toute écriture flash. Le handler final refuse la requête non authentifiée.
+      if (isAuthenticated()) (this->*uploadHandler)();
+    });
+  } else {
+    _srv.on(uri, method, authenticatedHandler);
+  }
+}
+
 void Portal::begin(bool startApFallbackIfNoWifi) {
   if (startApFallbackIfNoWifi && !WiFi.isConnected()) {
     startAp();
   }
 
-  _srv.on("/", HTTP_GET, [this]{ handleIndex(); });
-  _srv.on("/settings", HTTP_GET, [this]{ handleSettingsPage(); });
-  _srv.on("/logo.png", HTTP_GET, [this]{ handleLogo(); });
-  _srv.on("/api/ping", HTTP_GET, [this]{ handlePing(); });
-  _srv.on("/api/dashboard", HTTP_GET, [this]{ handleDashboard(); });
-  _srv.on("/programming", HTTP_GET, [this]{ handleProgrammationPage(); });
-  _srv.on("/api/programming", HTTP_GET, [this]{ handleGetProgrammation(); });
-  _srv.on("/api/programming", HTTP_POST, [this]{ handlePostProgrammation(); });
-  _srv.on("/api/config", HTTP_GET, [this]{ handleGetConfig(); });
-  _srv.on("/api/config", HTTP_POST, [this]{ handlePostConfig(); });
-  _srv.on("/api/reboot", HTTP_POST, [this]{ handleReboot(); });
-  _srv.on("/api/logs", HTTP_GET, [this]{ handleGetLogs(); });
-  _srv.on("/api/logs/clear", HTTP_POST, [this]{ handleClearLogs(); });
-  _srv.on("/logs", HTTP_GET, [this]{ handleLogsPage(); });
-  _srv.on("/api/status", HTTP_GET, [this]{ handleStatus(); });
-  _srv.on("/logs-radio", HTTP_GET, [this]{ handleRadioLogsPage(); });
-  _srv.on("/api/memory", HTTP_GET, [this]{ handleMemoryRead(); });
-  _srv.on("/api/memory/scan", HTTP_GET, [this]{ handleMemoryScan(); });
-  _srv.on("/memory", HTTP_GET, [this]{ handleMemoryPage(); });
-  _srv.on("/api/radio/send", HTTP_POST, [this]{ handleSendRadio(); });
-  _srv.on("/api/update", HTTP_POST, [this]{ handleUpdate(); }, [this]{ handleUpdateUpload(); });
-  _srv.on("/api/connect/pair", HTTP_POST, [this]{ handlePairConnect(); });
-  _srv.on("/api/sonde-ext/pair", HTTP_POST, [this]{ handlePairSondeExt(); });
-  _srv.on("/api/satellite/z1/pair", HTTP_POST, [this]{ handlePairSatelliteZ1(); });
-  _srv.on("/api/satellite/z2/pair", HTTP_POST, [this]{ handlePairSatelliteZ2(); });
-  _srv.on("/api/satellite/z3/pair", HTTP_POST, [this]{ handlePairSatelliteZ3(); });
-  _srv.on("/api/network-id/recup", HTTP_POST, [this]{ handleRecupNetworkId(); });
+  const char* headerKeys[] = {"Cookie"};
+  _srv.collectHeaders(headerKeys, 1);
+  _srv.on("/login", HTTP_GET, [this] { handleLoginPage(); });
+  _srv.on("/login", HTTP_POST, [this] { handleLogin(); });
+  onAuthenticated("/logout", HTTP_POST, &Portal::handleLogout);
+
+  onAuthenticated("/", HTTP_GET, &Portal::handleIndex);
+  onAuthenticated("/settings", HTTP_GET, &Portal::handleSettingsPage);
+  onAuthenticated("/logo.png", HTTP_GET, &Portal::handleLogo);
+  onAuthenticated("/api/ping", HTTP_GET, &Portal::handlePing);
+  onAuthenticated("/api/dashboard", HTTP_GET, &Portal::handleDashboard);
+  onAuthenticated("/programming", HTTP_GET, &Portal::handleProgrammationPage);
+  onAuthenticated("/api/programming", HTTP_GET, &Portal::handleGetProgrammation);
+  onAuthenticated("/api/programming", HTTP_POST, &Portal::handlePostProgrammation);
+  onAuthenticated("/api/config", HTTP_GET, &Portal::handleGetConfig);
+  onAuthenticated("/api/config", HTTP_POST, &Portal::handlePostConfig);
+  onAuthenticated("/api/reboot", HTTP_POST, &Portal::handleReboot);
+  onAuthenticated("/api/logs", HTTP_GET, &Portal::handleGetLogs);
+  onAuthenticated("/api/logs/clear", HTTP_POST, &Portal::handleClearLogs);
+  onAuthenticated("/logs", HTTP_GET, &Portal::handleLogsPage);
+  onAuthenticated("/api/status", HTTP_GET, &Portal::handleStatus);
+  onAuthenticated("/logs-radio", HTTP_GET, &Portal::handleRadioLogsPage);
+  onAuthenticated("/api/memory", HTTP_GET, &Portal::handleMemoryRead);
+  onAuthenticated("/api/memory/scan", HTTP_GET, &Portal::handleMemoryScan);
+  onAuthenticated("/memory", HTTP_GET, &Portal::handleMemoryPage);
+  onAuthenticated("/api/radio/send", HTTP_POST, &Portal::handleSendRadio);
+  onAuthenticated("/api/update", HTTP_POST, &Portal::handleUpdate, &Portal::handleUpdateUpload);
+  onAuthenticated("/api/connect/pair", HTTP_POST, &Portal::handlePairConnect);
+  onAuthenticated("/api/sonde-ext/pair", HTTP_POST, &Portal::handlePairSondeExt);
+  onAuthenticated("/api/satellite/z1/pair", HTTP_POST, &Portal::handlePairSatelliteZ1);
+  onAuthenticated("/api/satellite/z2/pair", HTTP_POST, &Portal::handlePairSatelliteZ2);
+  onAuthenticated("/api/satellite/z3/pair", HTTP_POST, &Portal::handlePairSatelliteZ3);
+  onAuthenticated("/api/network-id/recup", HTTP_POST, &Portal::handleRecupNetworkId);
 
 
   _srv.onNotFound([this](){
+    if (!requireAuthentication()) return;
     _srv.send(404, "text/plain; charset=utf-8", "404 Non trouvé");
   });
 
@@ -517,6 +662,18 @@ void Portal::handlePostConfig() {
   }
 
   auto& cfg = _frisquetManager.config();
+  // Ne jamais renvoyer le mot de passe dans GET /api/config. Un champ vide
+  // conserve la valeur existante ; valider avant toute mutation de paramètres.
+  const String portalPassword = _srv.arg("portalPassword");
+  const String portalPasswordConfirm = _srv.arg("portalPasswordConfirm");
+  const bool changePortalPassword = !portalPassword.isEmpty();
+  if (portalPassword.length() > 64
+      || strlen(portalPassword.c_str()) != portalPassword.length()
+      || portalPassword != portalPasswordConfirm) {
+    _srv.send(400, "application/json; charset=utf-8",
+              "{\"ok\":false,\"err\":\"Les mots de passe doivent être identiques et ne pas dépasser 64 octets\"}");
+    return;
+  }
   // Valider les réglages radio avant toute modification de la configuration.
   const bool hasBandwidth = _srv.hasArg("radioRxBandwidth");
   const bool hasBypass = _srv.hasArg("radioLnaBypass");
@@ -707,9 +864,11 @@ void Portal::handlePostConfig() {
     cfg.developerMode(parseBoolArg(_srv.arg("developerMode"), cfg.developerMode()));
   }
 
+  if (changePortalPassword) cfg.portalPassword(portalPassword);
   if (hasBandwidth) cfg.radioRxBandwidth(rxBandwidth);
   if (hasBypass) cfg.radioLnaBypass(lnaBypass);
   _frisquetManager.config().save();
+  if (changePortalPassword) clearSessions();
   info("[PORTAIL] Configuration enregistrée, redémarrage programmé");
 
   _srv.send(200, "application/json; charset=utf-8", "{\"ok\":true,\"reboot\":true}");

@@ -16,6 +16,7 @@ class Config {
 
         bool _useConnect = false;
         bool _developerMode = false;
+        String _portalPassword = "admin";
         float _radioRxBandwidth = RadioSettings::DEFAULT_RX_BANDWIDTH;
         bool _radioLnaBypass = RadioSettings::DEFAULT_LNA_BYPASS;
         bool _useConnectPassive = false;
@@ -37,6 +38,8 @@ class Config {
 
         bool developerMode() const { return _developerMode; }
         void developerMode(bool enabled) { _developerMode = enabled; }
+        const String& portalPassword() const { return _portalPassword; }
+        void portalPassword(const String& password) { _portalPassword = password; }
         float radioRxBandwidth() const { return _radioRxBandwidth; }
         void radioRxBandwidth(float bandwidth) { _radioRxBandwidth = bandwidth; }
         bool radioLnaBypass() const { return _radioLnaBypass; }
