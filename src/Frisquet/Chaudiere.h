@@ -85,6 +85,11 @@ public:
     int16_t getConsommationChauffage() const { return _consommationGazChauffage; }
     int16_t getConsommationECS() const { return _consommationGazECS; }
 
+    // Cumul de l'année en cours (somme des compteurs mensuels 0xA063).
+    void setConsommationAnnuelle(int32_t chauffage, int32_t ecs);
+    int32_t getConsommationAnnuelleChauffage() const { return _consommationAnnuelleChauffage; }
+    int32_t getConsommationAnnuelleECS() const { return _consommationAnnuelleECS; }
+
     bool setModeECS(MODE_ECS modeECS);
     bool setModeECS(const String& modeECS);
     MODE_ECS getModeECS() const { return _modeECS; }
@@ -124,6 +129,11 @@ private:
 
     int16_t _lastPubConsommationECS = -1;
     int16_t _lastPubConsommationChauffage = -1;
+
+    int32_t _consommationAnnuelleChauffage = -1;
+    int32_t _consommationAnnuelleECS = -1;
+    int32_t _lastPubConsommationAnnuelleChauffage = -1;
+    int32_t _lastPubConsommationAnnuelleECS = -1;
     ETAT_CHAUDIERE _etatChaudiere;
     bool _etatChaudiereConnu = false;
 
@@ -140,6 +150,8 @@ private:
         MqttEntity puissanceInstantaneeChauffage;
         MqttEntity consommationChauffage;
         MqttEntity consommationECS;
+        MqttEntity consommationAnnuelleChauffage;
+        MqttEntity consommationAnnuelleECS;
         MqttEntity pression;
     } _mqttEntities;
 };

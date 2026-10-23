@@ -41,6 +41,7 @@ class Connect : public FrisquetDevice {
         bool envoyerModeECS();
         bool recupererInformations();
         bool recupererConsommation();
+        bool recupererConsommationAnnuelle();
         bool recupererModeECS();
 
         float getTemperatureExterieure();
@@ -71,6 +72,7 @@ class Connect : public FrisquetDevice {
 
         void setConsommationECS(int16_t consommation);
         void setConsommationChauffage(int16_t consommation);
+        bool setConsommationAnnuelle(const byte* donnees, size_t length);
 
         void setPression(float pression);
         float getPression();
