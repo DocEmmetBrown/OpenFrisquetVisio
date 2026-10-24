@@ -88,22 +88,42 @@ void Chaudiere::begin(std::function<void(const String&)> modeEcsCommandCb) {
     _mqtt.registerEntity(*device, _mqttEntities.puissanceInstantaneeChauffage, true);
 
     _mqttEntities.consommationChauffage.id = "consommationChauffage";
-    _mqttEntities.consommationChauffage.name = "Consommation chauffage";
+    _mqttEntities.consommationChauffage.name = "Consommation chauffage (veille)";
     _mqttEntities.consommationChauffage.component = "sensor";
     _mqttEntities.consommationChauffage.stateTopic = MqttTopic(MqttManager::compose({device->baseTopic, "chaudiere", "consommationChauffage"}), 0, true);
+    // Valeur de la veille, pas un compteur : sans state_class pour ne pas
+    // fausser les statistiques (voir consommationAnnuelleChauffage).
     _mqttEntities.consommationChauffage.set("device_class", "energy");
-    _mqttEntities.consommationChauffage.set("state_class", "total_increasing");
     _mqttEntities.consommationChauffage.set("unit_of_measurement", "kWh");
     _mqtt.registerEntity(*device, _mqttEntities.consommationChauffage, true);
 
     _mqttEntities.consommationECS.id = "consommationECS";
-    _mqttEntities.consommationECS.name = "Consommation ECS";
+    _mqttEntities.consommationECS.name = "Consommation ECS (veille)";
     _mqttEntities.consommationECS.component = "sensor";
     _mqttEntities.consommationECS.stateTopic = MqttTopic(MqttManager::compose({device->baseTopic, "chaudiere", "consommationECS"}), 0, true);
     _mqttEntities.consommationECS.set("device_class", "energy");
-    _mqttEntities.consommationECS.set("state_class", "total_increasing");
     _mqttEntities.consommationECS.set("unit_of_measurement", "kWh");
     _mqtt.registerEntity(*device, _mqttEntities.consommationECS, true);
+
+    // Cumul de l'année en cours : ne fait qu'augmenter et revient à zéro au
+    // 1er janvier, utilisable dans le tableau de bord Énergie.
+    _mqttEntities.consommationAnnuelleChauffage.id = "consommationAnnuelleChauffage";
+    _mqttEntities.consommationAnnuelleChauffage.name = "Consommation chauffage (année)";
+    _mqttEntities.consommationAnnuelleChauffage.component = "sensor";
+    _mqttEntities.consommationAnnuelleChauffage.stateTopic = MqttTopic(MqttManager::compose({device->baseTopic, "chaudiere", "consommationAnnuelleChauffage"}), 0, true);
+    _mqttEntities.consommationAnnuelleChauffage.set("device_class", "energy");
+    _mqttEntities.consommationAnnuelleChauffage.set("state_class", "total_increasing");
+    _mqttEntities.consommationAnnuelleChauffage.set("unit_of_measurement", "kWh");
+    _mqtt.registerEntity(*device, _mqttEntities.consommationAnnuelleChauffage, true);
+
+    _mqttEntities.consommationAnnuelleECS.id = "consommationAnnuelleECS";
+    _mqttEntities.consommationAnnuelleECS.name = "Consommation ECS (année)";
+    _mqttEntities.consommationAnnuelleECS.component = "sensor";
+    _mqttEntities.consommationAnnuelleECS.stateTopic = MqttTopic(MqttManager::compose({device->baseTopic, "chaudiere", "consommationAnnuelleECS"}), 0, true);
+    _mqttEntities.consommationAnnuelleECS.set("device_class", "energy");
+    _mqttEntities.consommationAnnuelleECS.set("state_class", "total_increasing");
+    _mqttEntities.consommationAnnuelleECS.set("unit_of_measurement", "kWh");
+    _mqtt.registerEntity(*device, _mqttEntities.consommationAnnuelleECS, true);
 
     _mqttEntities.modeECS.id = "modeECS";
     _mqttEntities.modeECS.name = "Mode ECS";
@@ -169,6 +189,17 @@ void Chaudiere::publishMqtt() {
             _lastPubConsommationECS = getConsommationECS();
             _mqtt.publishState(_mqttEntities.consommationECS, getConsommationECS());
         }
+    }
+
+    if (getConsommationAnnuelleChauffage() >= 0
+        && _lastPubConsommationAnnuelleChauffage != getConsommationAnnuelleChauffage()) {
+        _lastPubConsommationAnnuelleChauffage = getConsommationAnnuelleChauffage();
+        _mqtt.publishState(_mqttEntities.consommationAnnuelleChauffage, (float)getConsommationAnnuelleChauffage(), 0);
+    }
+    if (getConsommationAnnuelleECS() >= 0
+        && _lastPubConsommationAnnuelleECS != getConsommationAnnuelleECS()) {
+        _lastPubConsommationAnnuelleECS = getConsommationAnnuelleECS();
+        _mqtt.publishState(_mqttEntities.consommationAnnuelleECS, (float)getConsommationAnnuelleECS(), 0);
     }
 
     publishModeEcs();
@@ -241,6 +272,11 @@ void Chaudiere::setTemperatureCDC(float temperature) {
 
 void Chaudiere::setConsommationECS(int16_t consommation) {
     _consommationGazECS = consommation;
+}
+
+void Chaudiere::setConsommationAnnuelle(int32_t chauffage, int32_t ecs) {
+    _consommationAnnuelleChauffage = chauffage;
+    _consommationAnnuelleECS = ecs;
 }
 
 void Chaudiere::setConsommationChauffage(int16_t consommation) {

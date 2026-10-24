@@ -263,6 +263,68 @@ bool Connect::recupererConsommation() {
     return false;
 }
 
+// Consommation mensuelle de l'année en cours en kWh, de janvier à décembre :
+// chauffage puis ECS pour chaque mois (24 mots à partir de 0xA063).
+// 0xA07B contient l'année précédente.
+struct ConsommationMensuelle {
+    FrisquetRadio::RadioTrameHeader header;
+    uint8_t longueurDonnees;
+    fword mois[24];
+};
+static_assert(sizeof(ConsommationMensuelle) == 55, "La réponse A063 doit contenir 55 octets");
+
+bool Connect::recupererConsommationAnnuelle() {
+    if(! estAssocie()) {
+        return false;
+    }
+
+    ConsommationMensuelle buff;
+
+    size_t length;
+    int16_t err;
+
+    uint8_t retry = 0;
+    do {
+        length = sizeof(buff);
+        err = this->radio().sendAsk(
+            this->getId(), 
+            ID_CHAUDIERE, 
+            this->getIdAssociation(),
+            this->incrementIdMessage(),
+            0x01,
+            0xA063,
+            0x0018,
+            (byte*)&buff,
+            length
+        );
+
+        if(err != RADIOLIB_ERR_NONE) {
+            delay(100);
+            continue;
+        }
+
+        return setConsommationAnnuelle((byte*)&buff, length);
+    } while(retry++ < 1);
+
+    return false;
+}
+
+bool Connect::setConsommationAnnuelle(const byte* donnees, size_t length) {
+    ConsommationMensuelle resp;
+    if (!donnees || length < sizeof(resp)) return false;
+    memcpy(&resp, donnees, sizeof(resp));
+    if (resp.longueurDonnees != sizeof(resp.mois)) return false;
+
+    int32_t chauffage = 0;
+    int32_t ecs = 0;
+    for (uint8_t mois = 0; mois < 12; mois++) {
+        chauffage += resp.mois[mois * 2].toInt16();
+        ecs += resp.mois[mois * 2 + 1].toInt16();
+    }
+    _chaudiere.setConsommationAnnuelle(chauffage, ecs);
+    return true;
+}
+
 void Connect::setTemperatureExterieure(float temperature) {
     _chaudiere.setTemperatureExterieure(temperature);
 }
@@ -444,6 +506,7 @@ bool Connect::handlePassiveReadResponse(uint16_t adresseMemoire, const byte* buf
     const uint16_t addrConsommation = 0x7A18;
     const uint16_t addrDate = 0xA02B;
     const uint16_t addrModeEcs = 0xA0F0;
+    const uint16_t addrConsommationAnnuelle = 0xA063;
 
     auto addrIsInformations = adresseMemoire == addrInformations || adresseMemoire == (addrInformations + 0x00C8);
     auto addrIsInformations2 = adresseMemoire == addrInformations2 || adresseMemoire == (addrInformations2 + 0x00C8);
@@ -597,6 +660,14 @@ bool Connect::handlePassiveReadResponse(uint16_t adresseMemoire, const byte* buf
 
         Date date = resp.date;
         setDate(date);
+        return true;
+    }
+
+    if (adresseMemoire == addrConsommationAnnuelle) {
+        debug("[CONNECT] Réception des consommations mensuelles passives du Connect.");
+        if (!setConsommationAnnuelle(buff, length)) return false;
+        _lastRecuperationConsommation = millis();
+        publishMqtt();
         return true;
     }
 
@@ -784,6 +855,10 @@ void Connect::loop() {
             error("[CONNECT] Échec de la récupération initiale des consommations.");
         }
         delay(100);
+        if (!recupererConsommationAnnuelle()) {
+            error("[CONNECT] Échec de la récupération initiale des consommations mensuelles.");
+        }
+        delay(100);
         if (recupererModeECS()) {
             _lastRecuperationModeECS = millis();
         } else {
@@ -826,10 +901,14 @@ void Connect::loop() {
         info("[CONNECT] Récupération des consommations...");
         if (recupererConsommation()) {
             _lastRecuperationConsommation = millis();
-            publishMqtt();
         } else {
             error("[CONNECT] Échec de la récupération des consommations.");
         }
+        delay(100);
+        if (!recupererConsommationAnnuelle()) {
+            error("[CONNECT] Échec de la récupération des consommations mensuelles.");
+        }
+        publishMqtt();
         return;
     }
     if (_ecsSchedule.due(3600, 420)) {
