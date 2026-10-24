@@ -1,15 +1,10 @@
 #pragma once
 
-#include <heltec.h>
+#include <Board.h>
 #include <RadioLib.h>
 #include <math.h>
 #include "RadioSettings.h"
 #include "RadioCrc.h"
-
-#define SS GPIO_NUM_8
-#define RST_LoRa GPIO_NUM_12
-#define BUSY_LoRa GPIO_NUM_13
-#define DIO0 GPIO_NUM_14
 
 class Radio {
 
@@ -31,10 +26,15 @@ class Radio {
 
     private:
         int16_t finishReceive(int16_t result, const char* operation, const uint8_t* data, size_t requestedLength);
-        // Les chemins bloquant et asynchrone partagent la lecture brute et la
-        // validation logicielle ; les métadonnées survivent à l'effacement IRQ.
-        struct PacketRadio : public SX1262 {
-            using SX1262::SX1262;
+        // Les chemins bloquant et asynchrone partagent la lecture et le CRC
+        // propres à la puce ; les métadonnées survivent à l'effacement IRQ.
+#if defined(RADIO_SX1276)
+        using RadioChip = SX1276;
+#else
+        using RadioChip = SX1262;
+#endif
+        struct PacketRadio : public RadioChip {
+            using RadioChip::RadioChip;
             uint16_t lastRxIrq = 0;
             size_t lastRxLength = 0;
             uint8_t lastRxOffset = 0;
@@ -44,7 +44,9 @@ class Radio {
             int16_t startReceive() override;
             int16_t receive(uint8_t* data, size_t len, RadioLibTime_t timeout = 0) override;
             int16_t readData(uint8_t* data, size_t len) override;
+#if !defined(RADIO_SX1276)
             int16_t startReceiveWithLimit(uint32_t timeout);
+#endif
         };
         PacketRadio _radio;
         float _lastPacketRSSI = NAN;

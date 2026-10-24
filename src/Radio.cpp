@@ -1,6 +1,70 @@
 #include "Radio.h"
 #include "Logs.h"
 
+#if defined(RADIO_SX1276)
+int16_t Radio::PacketRadio::startReceive() {
+    int16_t result = standby();
+    if(result != RADIOLIB_ERR_NONE) return result;
+    if(getActiveModem() != RADIOLIB_SX127X_FSK_OOK) return RADIOLIB_ERR_WRONG_MODEM;
+    result = setCRC(true, false); // CCITT, init 0x1D0F, résultat inversé.
+    if(result != RADIOLIB_ERR_NONE) return result;
+    // Conserver les paquets CRC invalides pour les compter et les journaliser.
+    result = getMod()->SPIsetRegValue(RADIOLIB_SX127X_REG_PACKET_CONFIG_1,
+                                     RADIOLIB_SX127X_CRC_AUTOCLEAR_OFF, 3, 3);
+    if(result != RADIOLIB_ERR_NONE) return result;
+    result = variablePacketLengthMode(MAX_RX_PACKET_LENGTH);
+    if(result != RADIOLIB_ERR_NONE) return result;
+    return SX1276::startReceive(0, RADIOLIB_IRQ_RX_DEFAULT_FLAGS, RADIOLIB_IRQ_RX_DEFAULT_MASK, 0);
+}
+
+int16_t Radio::PacketRadio::receive(uint8_t* data, size_t len, RadioLibTime_t timeout) {
+    // Même budget que le SX1262 : environ 408 ms si la longueur est inconnue.
+    const uint32_t timeoutMs = timeout ? timeout : static_cast<uint32_t>((len ? len : 255) * 8.0f / 25.0f * 5.0f);
+    int16_t result = startReceive();
+    if(result != RADIOLIB_ERR_NONE) return result;
+    const uint32_t started = getMod()->hal->millis();
+    while(!getMod()->hal->digitalRead(getMod()->getIrq())) {
+        getMod()->hal->yield();
+        if(getMod()->hal->millis() - started > timeoutMs) {
+            standby();
+            clearIrqFlags(RADIOLIB_SX127X_FLAGS_ALL);
+            return RADIOLIB_ERR_RX_TIMEOUT;
+        }
+    }
+    return readData(data, len);
+}
+
+int16_t Radio::PacketRadio::readData(uint8_t* data, size_t len) {
+    lastRxLength = 0;
+    lastRxOffset = 0;
+    rawLength = 0;
+    crcResult = RadioCrc::Result();
+    int16_t result = standby();
+    if(result != RADIOLIB_ERR_NONE) return result;
+    lastRxIrq = getIrqFlags();
+    if(lastRxIrq & (RADIOLIB_SX127X_FLAG_FIFO_OVERRUN << 8)) {
+        clearIrqFlags(RADIOLIB_SX127X_FLAGS_ALL);
+        return RADIOLIB_ERR_CRC_MISMATCH;
+    }
+    if(!(lastRxIrq & (RADIOLIB_SX127X_FLAG_PAYLOAD_READY << 8))) return RADIOLIB_ERR_RX_TIMEOUT;
+    // Dépiler la longueur une seule fois : getPacketLength() pourrait consommer
+    // un octet de la trame suivante. Le CRC matériel n'est pas placé en FIFO.
+    const uint8_t length = getMod()->SPIreadRegister(RADIOLIB_SX127X_REG_FIFO);
+    if(length == 0 || length > MAX_RX_PACKET_LENGTH) {
+        clearIrqFlags(RADIOLIB_SX127X_FLAGS_ALL);
+        return RADIOLIB_ERR_CRC_MISMATCH;
+    }
+    raw[0] = length;
+    getMod()->SPIreadRegisterBurst(RADIOLIB_SX127X_REG_FIFO, length, raw + 1);
+    rawLength = length + 1;
+    lastRxLength = length;
+    const size_t copied = len && len < length ? len : length;
+    memcpy(data, raw + 1, copied);
+    const bool crcOk = (lastRxIrq & (RADIOLIB_SX127X_FLAG_CRC_OK << 8)) != 0;
+    clearIrqFlags(RADIOLIB_SX127X_FLAGS_ALL);
+    return crcOk ? RADIOLIB_ERR_NONE : RADIOLIB_ERR_CRC_MISMATCH;
+}
+#else
 int16_t Radio::PacketRadio::startReceive() {
     return startReceiveWithLimit(RADIOLIB_SX126X_RX_TIMEOUT_INF);
 }
@@ -87,11 +151,20 @@ int16_t Radio::PacketRadio::readData(uint8_t* data, size_t len) {
     return accepted ? RADIOLIB_ERR_NONE : RADIOLIB_ERR_CRC_MISMATCH;
 }
 
+#endif
+
 int16_t Radio::transmit(byte data[], size_t len) {
+#if defined(RADIO_SX1276)
+    if(len > MAX_RX_PACKET_LENGTH) return RADIOLIB_ERR_PACKET_TOO_LONG;
+#endif
     // Restaurer le format sur l'air : longueur variable et CRC matériel.
     int16_t result = _radio.standby();
     if (result != RADIOLIB_ERR_NONE) return result;
+#if defined(RADIO_SX1276)
+    result = _radio.setCRC(true, false);
+#else
     result = _radio.setCRC(2, 0x1D0F, 0x1021, true);
+#endif
     if (result != RADIOLIB_ERR_NONE) return result;
     result = _radio.variablePacketLengthMode(MAX_RX_PACKET_LENGTH);
     if (result != RADIOLIB_ERR_NONE) return result;
@@ -120,14 +193,25 @@ int16_t Radio::readData(uint8_t data[], size_t len) {
 
 bool Radio::hasReceivedPacket() {
     const uint16_t irq = _radio.getIrqFlags();
+#if defined(RADIO_SX1276)
+    return (irq & ((RADIOLIB_SX127X_FLAG_PAYLOAD_READY | RADIOLIB_SX127X_FLAG_FIFO_OVERRUN) << 8)) != 0;
+#else
     return (irq & (RADIOLIB_SX126X_IRQ_RX_DONE | RADIOLIB_SX126X_IRQ_CRC_ERR
                    | RADIOLIB_SX126X_IRQ_HEADER_ERR)) != 0;
+#endif
 }
 
 int16_t Radio::finishReceive(int16_t result, const char* operation, const uint8_t* data, size_t requestedLength) {
     // Relever le RSSI avant le prochain réarmement.
     const bool packetRead = result == RADIOLIB_ERR_NONE || result == RADIOLIB_ERR_CRC_MISMATCH;
     _lastPacketRSSI = packetRead ? _radio.getRSSI() : NAN;
+#if defined(RADIO_SX1276)
+    if(result == RADIOLIB_ERR_CRC_MISMATCH) {
+        logs.addLogf("RADIO", "[RX][CRC_ERROR][mode=hardware][chip=SX1276][len=%u][IRQ=0x%04X][RSSI=%.1f dBm]",
+                     static_cast<unsigned>(_radio.lastRxLength), static_cast<unsigned>(_radio.lastRxIrq), _lastPacketRSSI);
+        logRadioCrcData(_radio.raw + 1, _radio.lastRxLength, "CRC_DATA");
+    }
+#else
     if (result == RADIOLIB_ERR_NONE && _radio.crcResult.status == RadioCrc::Status::Repaired) {
         logs.addLogf("RADIO", "[RX][CRC_REPAIRED][len=%u][bit=%u][zero=%+d][edits=%u][RSSI=%.1f dBm]",
                      static_cast<unsigned>(_radio.lastRxLength),
@@ -153,6 +237,7 @@ int16_t Radio::finishReceive(int16_t result, const char* operation, const uint8_
                      RadioCrc::statusName(_radio.crcResult.status), static_cast<unsigned>(_radio.rawLength));
         logRadioCrcData(_radio.raw, _radio.rawLength, "CRC_RAW");
     }
+#endif
     return result;
 }
 
@@ -164,9 +249,12 @@ constexpr uint8_t KCT8103L_CTX_PIN = GPIO_NUM_5;
 }
 #endif
 
-Radio::Radio() : _radio(new Module(SS, DIO0, RST_LoRa, BUSY_LoRa)) {}
+Radio::Radio() : _radio(new Module(RADIO_NSS, RADIO_IRQ, RADIO_RST, RADIO_GPIO)) {}
 
 void Radio::init(float rxBandwidth, bool lnaBypass) {
+#if defined(RADIO_SX1276)
+    SPI.begin(RADIO_SCK, RADIO_MISO, RADIO_MOSI, RADIO_NSS);
+#endif
 #if defined(WIFI_LORA_32_V4) && defined(USE_KCT8103L_PA)
     // Heltec WiFi LoRa 32 V4.3: power and enable the KCT8103L FEM.
     pinMode(KCT8103L_POWER_PIN, OUTPUT);
@@ -195,7 +283,11 @@ void Radio::init(float rxBandwidth, bool lnaBypass) {
     info("[RADIO] KCT8103L : bypass du LNA %s en réception.", lnaBypass ? "activé" : "désactivé");
 #endif
 
-    _radio.beginFSK();
+    const int16_t initResult = _radio.beginFSK();
+    if(initResult != RADIOLIB_ERR_NONE) {
+        error("[RADIO] Échec initialisation FSK : %d", initResult);
+        return;
+    }
     _radio.setFrequency(868.96);
     _radio.setBitRate(25.0);
     _radio.setFrequencyDeviation(50.0);
@@ -207,6 +299,10 @@ void Radio::init(float rxBandwidth, bool lnaBypass) {
         info("[RADIO] Bande RX configurée : %.1f kHz.", rxBandwidth);
     }
     _radio.setPreambleLength(16);
+#if defined(RADIO_SX1276)
+    info("[RADIO] SX1276 : longueur variable, %u octets max, CRC matériel CCITT.", MAX_RX_PACKET_LENGTH);
+#else
     info("[RADIO] RX brut : %u octets, données : %u max, CRC logiciel et réparation unique.",
          static_cast<unsigned>(RadioCrc::RAW_LENGTH), MAX_RX_PACKET_LENGTH);
+#endif
 }

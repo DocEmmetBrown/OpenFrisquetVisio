@@ -1,4 +1,5 @@
 #include "App.h"
+#include <Board.h>
 
 App::App() : _mqtt(_wifiClient), _frisquetManager(_radio, _cfg, _mqtt) {}
 
@@ -6,7 +7,9 @@ void App::begin() {
   Serial.begin(115200);
   delay(50);
 
+#if defined(BOARD_HELTEC)
   Heltec.begin(false /*DisplayEnable disable*/, false /*LoRa Disable*/, true /*Serial Enable*/);
+#endif
 
   initConfig();
   initNetwork();
