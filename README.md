@@ -1,6 +1,6 @@
 # 🧠 OpenFrisquetVisio
 
-Emulation complète du module **Frisquet Connect**, **sonde Extérieure** ou encore **satellite d'ambiance** sur base **Heltec ESP32 WiFi LoRa 32 (SX1262)**.  
+Emulation complète du module **Frisquet Connect**, **sonde Extérieure** ou encore **satellite d'ambiance** sur base **Heltec ESP32 WiFi LoRa 32 (SX1262)** ou **LilyGo/TTGO LoRa32 V2.1 (SX1276, 868 MHz)**.
 Ce projet permet à un ESP32 de dialoguer directement avec votre chaudière Frisquet,  
 de récupérer les informations en temps réel et de les exposer à **Home Assistant via MQTT**.
 
@@ -83,8 +83,9 @@ Les tests du codage des demi-heures et de la sauvegarde se lancent avec
 
 | Composant | Description | Remarques |
 |------------|-------------|-----------|
-| 🧠 Heltec ESP32 WiFi LoRa 32 (SX1262) | Carte principale | Doit posséder le module **SX1262** |
-| 🌡️ DS18B20 (optionnel) | Sonde de température | Connectée sur GPIO **33** par défaut |
+| 🧠 Heltec ESP32 WiFi LoRa 32 V3/V4 (SX1262) | Carte principale | Module **SX1262** |
+| 🧠 LilyGo/TTGO LoRa32 V2.1 (SX1276) | Alternative | Version **868 MHz** |
+| 🌡️ DS18B20 (optionnel) | Sonde de température | GPIO **33** sur Heltec, GPIO **13** sur LilyGo |
 | 🔩 Résistance 4,7 kΩ | Pull-up pour DS18B20 | Entre **VCC** et **DATA** |
 | ☕ Café | Indispensable | Pour le développeur 😁 |
 
@@ -95,20 +96,46 @@ Les tests du codage des demi-heures et de la sauvegarde se lancent avec
 ### 1️⃣ Préparation du firmware
 
 Avant le flash :
-- Ouvrir le fichier **`DS18B20.h`**  
+- Ouvrir le fichier **`include/Board.h`**
   et vérifier / modifier les options selon vos besoins :
 
 | Option | Description |
 |---------|-------------|
-| `PIN_DS18B20` | GPIO utilisé (par défaut 33) |
+| `DS18B20_PIN` | GPIO utilisé (33 sur Heltec, 13 sur LilyGo) |
 
 ---
 
 ### 2️⃣ Flash du firmware
 
-- Connecter la carte **Heltec ESP32** via **USB**  
+- Connecter la carte via **USB**
 - Compiler et téléverser avec **PlatformIO**
 - Au premier démarrage, le module crée un **point d’accès WiFi**
+
+---
+
+### Variante LilyGo/TTGO LoRa32 V2.1 (SX1276)
+
+Le support reprend le brochage de la [PR #20 de Julien Hammer](https://github.com/FreedomNX/OpenFrisquetVisio/pull/20), adapté à RadioLib 7.8.1 et à la gestion actuelle de réception. Il cible la LoRa32 V2.1 avec **SX1276 en 868 MHz** ; les autres cartes LilyGo peuvent avoir un brochage différent.
+
+La configuration [platformio.lilygo.ini](platformio.lilygo.ini) importe les réglages communs de votre `platformio.ini` local et remplace la carte, les dépendances Heltec et le mode de téléversement. Elle utilise un partitionnement avec OTA et un premier flash USB :
+
+```sh
+pio run --project-conf platformio.lilygo.ini -e ttgo_lora32_v21
+pio run --project-conf platformio.lilygo.ini -e ttgo_lora32_v21 -t upload
+```
+
+| Signal | GPIO LilyGo |
+|---|---|
+| SPI SCK / MISO / MOSI | 5 / 19 / 27 |
+| Radio NSS / RESET | 18 / 23 |
+| Radio DIO0 / DIO1 | 26 / 33 |
+| DS18B20 | 13 (microSD inutilisée) |
+
+La bande RX par défaut est **250 kHz** sur SX1276 ; les paramètres du portail proposent les bandes propres à cette puce. Le journal contient au maximum **120 lignes**, pour limiter la RAM statique de l'ESP32 classique.
+
+La FIFO FSK du SX1276 ne contient que **64 octets**. La réception utilise donc le format variable : un octet de longueur et jusqu'à **63 octets de données**, avec validation matérielle du CRC CCITT (init `0x1D0F`, polynôme `0x1021`, complémenté). Les trames CRC invalides sont journalisées et rejetées. Le CRC reçu est retiré par la puce : la capture brute de 68 octets et la réparation logicielle du SX1262 ne sont pas disponibles sur cette variante. Voir la [documentation Semtech, sections FIFO et CRC](https://cdn.sparkfun.com/assets/7/7/3/2/2/SX1276_Datasheet.pdf).
+
+Compilation et tests du traitement FIFO validés ; association et échanges radio à confirmer sur une carte réelle. Les configurations Heltec conservent la réception brute et la réparation CRC.
 
 ---
 
@@ -208,4 +235,4 @@ Mais bon, si ça marche, vous pouvez toujours m’offrir un café ☕ 😉
 **Année :** 2025  
 **Plateforme :** ESP32 (Heltec WiFi LoRa 32, SX1262)  
 **Compatibilité :** Home Assistant, MQTT, Frisquet Chaudière série Eco Radio Visio  
-**Version :** 26.10.22.1250
+**Version :** 26.10.24.1813

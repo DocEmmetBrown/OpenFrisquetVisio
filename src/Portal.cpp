@@ -590,6 +590,7 @@ void Portal::handleGetConfig() {
   if (_frisquetManager.config().developerMode()) {
     const auto& cfg = _frisquetManager.config();
     json += "\"radioRxBandwidth\":" + String(cfg.radioRxBandwidth(), 1) + ",";
+    json += "\"radioDefaultRxBandwidth\":" + String(RadioSettings::DEFAULT_RX_BANDWIDTH, 1) + ",";
     json += "\"radioLnaBypass\":" + String(cfg.radioLnaBypass() ? "true" : "false") + ",";
     json += "\"radioBypassSupported\":" + String(RadioSettings::supportsLnaBypass() ? "true" : "false") + ",";
     json += "\"radioRxBandwidths\":[";

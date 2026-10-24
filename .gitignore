@@ -18,3 +18,5 @@ tests/*
 !tests/test_zone_modes.py
 !tests/test_boiler_state.py
 !tests/boiler-state.test.mjs
+
+!tests/test_sx1276_radio.py
