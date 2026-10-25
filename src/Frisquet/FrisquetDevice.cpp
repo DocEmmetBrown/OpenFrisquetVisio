@@ -7,6 +7,7 @@ bool FrisquetDevice::associer(NetworkID& networkId, uint8_t& idAssociation) {
     size_t buffLength = 0;
     int16_t err;
     
+    const NetworkID previousNetworkId = radio().getNetworkID();
     radio().setNetworkID({0xFF, 0xFF, 0xFF, 0xFF}); // Broadcast
 
     uint8_t retry = 0;
@@ -68,6 +69,8 @@ bool FrisquetDevice::associer(NetworkID& networkId, uint8_t& idAssociation) {
         }
     } while(millis() < timeout);
 
+    // Sans cela, la radio reste sur le réseau de diffusion et n'entend plus la chaudière.
+    radio().setNetworkID(previousNetworkId);
     return false;
 }
 

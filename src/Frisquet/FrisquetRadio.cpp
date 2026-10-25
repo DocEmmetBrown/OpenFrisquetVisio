@@ -347,5 +347,6 @@ int16_t FrisquetRadio::receiveExpected(
 }
 
 void FrisquetRadio::setNetworkID(NetworkID networkID) {
+    _networkID = networkID;
     this->setSyncWord(networkID.bytes, sizeof(networkID.bytes));
 }

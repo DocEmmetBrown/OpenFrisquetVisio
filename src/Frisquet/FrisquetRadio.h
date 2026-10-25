@@ -104,6 +104,7 @@ class FrisquetRadio : public Radio {
         );
 
     void setNetworkID(NetworkID networkID);
+    NetworkID getNetworkID() const { return _networkID; }
 
     bool popBufferedPacket(byte* donnees, size_t& length, float* rssi = nullptr);
     bool hasBufferedPacket();
@@ -120,6 +121,7 @@ class FrisquetRadio : public Radio {
         byte data[RADIOLIB_SX126X_MAX_PACKET_LENGTH] = {0};
     };
 
+    NetworkID _networkID;
     void purgeBufferedPackets();
     bool bufferUnexpectedPacket(const byte* donnees, size_t length);
     BufferedPacket _rxBuffer[RX_BUFFER_SIZE];

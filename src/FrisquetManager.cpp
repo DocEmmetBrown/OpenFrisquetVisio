@@ -246,6 +246,7 @@ bool FrisquetManager::recupererNetworkID() {
     size_t buffLength = 0;
     int16_t err;
     
+    const NetworkID previousNetworkId = radio().getNetworkID();
     radio().setNetworkID({0xFF, 0xFF, 0xFF, 0xFF}); // Broadcast
 
     uint8_t retry = 0;
@@ -283,5 +284,6 @@ bool FrisquetManager::recupererNetworkID() {
         }
     } while(millis() < timeout);
 
+    radio().setNetworkID(previousNetworkId);
     return false;
 }
